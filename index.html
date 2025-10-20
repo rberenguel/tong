@@ -37,21 +37,24 @@
         const COURT_Y_FACTOR = 0.75;
         const MAX_PADDLE_ANGLE = Math.PI / 6;
         const PADDLE_SPEED = 0.35;
-        const AI_PADDLE_SPEED_X = 0.08; // <-- Add this line
+        const AI_PADDLE_SPEED_X = 0.08;
         
         const scoreElement = document.getElementById('score');
         const setsElement = document.getElementById('sets');
         const messageElement = document.getElementById('message');
         const shotIndicator = document.getElementById('shot-indicator');
 
-        let app, player1, player2, ball, net, floor, trail;
+        let app, player1, player2, ball, net, floor, trail, contactLine;
         let state = {};
         let trailPoints = [];
+        let touchState = {}; // <-- Add this
 
         function initializeGameState() {
             state = {
                 ballInPlay: false, shotCharging: false, shotPower: 0, bounces: 0,
-                lastSideHit: null, servingPlayer: 'player1',
+                lastPaddleHitSide: null, 
+                lastBounceSide: null,    
+                servingPlayer: 'player1',
                 scores: { player1: { points: 0, games: 0, sets: 0 }, player2: { points: 0, games: 0, sets: 0 } },
                 gameOver: false,
                 ballSpin: 0,
@@ -59,12 +62,22 @@
                 mustBounceBeforeHit: false,
                 hasBouncedOnCurrentSide: false
             };
+            
+            touchState = {
+                isCharging: false,
+                isMovingPaddle: false,
+                startX: 0,
+                startY: 0,
+                startPaddleX: 0,
+                startPaddleAngle: 0
+            };
         }
 
         function setupScene() {
             floor = new PIXI.Graphics(); 
             net = new PIXI.Graphics();
             trail = new PIXI.Graphics();
+            contactLine = new PIXI.Graphics(); // <-- Add this
             
             player1 = createPaddle(0x00FFFF); 
             player2 = createPaddle(0xFFA500);
@@ -75,7 +88,7 @@
             ball.vx = 0;
             ball.vy = 0;
             
-            app.stage.addChild(floor, net, trail, player1, player2, ball);
+            app.stage.addChild(floor, net, trail, contactLine, player1, player2, ball); // <-- Add contactLine here
         }
 
         function resizeAndPosition() {
@@ -109,22 +122,61 @@
             return p;
         }
 
-        function addControls() {
+       function addControls() {
             app.stage.eventMode = 'static'; 
             app.stage.hitArea = app.screen; 
             app.canvas.style.touchAction = 'none';
             
             const handlePointerDown = e => {
-                if (state.gameOver || !state.ballInPlay) return;
-                startShotCharge();
+                if (state.gameOver) return;
+
+                // Desktop: Mouse click anywhere starts charging
+                if (e.pointerType === 'mouse') {
+                    if (state.ballInPlay && !player1.swing.active && !state.shotCharging) {
+                        startShotCharge();
+                    }
+                    return; // Done for mouse input
+                }
+
+                // Mobile: Touch uses split screen logic
+                const screenW = app.screen.width;
+                const x = e.global.x;
+
+                if (x < screenW / 2) { // Left side: Control paddle
+                    if (!state.shotCharging && !player1.swing.active) {
+                        touchState.isMovingPaddle = true;
+                        touchState.startX = x;
+                        touchState.startY = e.global.y;
+                        touchState.startPaddleX = player1.baseX;
+                    }
+                } else { // Right side: Charge shot
+                    if (state.ballInPlay && !player1.swing.active && !touchState.isCharging) {
+                        touchState.isCharging = true;
+                        startShotCharge();
+                    }
+                }
             };
             
             const handlePointerUp = () => { 
-                if (state.shotCharging) releaseShot(); 
+                // This now works for both mouse and touch release
+                if (state.shotCharging) {
+                    releaseShot(); 
+                }
+                // Reset touch-specific state regardless
+                touchState.isCharging = false;
+                touchState.isMovingPaddle = false;
             };
             
             const handlePointerMove = e => { 
-                updatePaddleControl(e.global.x, e.global.y); 
+                if (touchState.isMovingPaddle) {
+                    // Relative control for an active touch drag
+                    const deltaX = e.global.x - touchState.startX;
+                    const deltaY = e.global.y - touchState.startY;
+                    updatePaddleControl(deltaX, deltaY, 'relative');
+                } else if (e.pointerType === 'mouse') {
+                    // Absolute control for desktop mouse whenever it moves
+                    updatePaddleControl(e.global.x, e.global.y, 'absolute');
+                }
             };
             
             app.stage.on('pointerdown', handlePointerDown);
@@ -132,6 +184,7 @@
             app.stage.on('pointerupoutside', handlePointerUp);
             app.stage.on('pointermove', handlePointerMove);
             
+            // Keyboard controls remain unchanged
             window.addEventListener('keydown', (e) => {
                 if (e.code === 'Space' && !state.shotCharging && state.ballInPlay && !state.gameOver) {
                     e.preventDefault();
@@ -147,24 +200,41 @@
             });
         }
 
-        function updatePaddleControl(globalX, globalY) {
+        function updatePaddleControl(x, y, mode = 'absolute') {
             const screenW = app.screen.width;
             const screenH = app.screen.height;
             const courtY = screenH * COURT_Y_FACTOR;
             
-            player1.baseX = Math.max(PADDLE_WIDTH * 2, Math.min(screenW / 2 - 50, globalX));
+            if (mode === 'relative') {
+                // x is deltaX, y is deltaY
+                // 1. Horizontal Paddle Position (Relative)
+                const newBaseX = touchState.startPaddleX + x;
+                player1.baseX = Math.max(PADDLE_WIDTH * 2, Math.min(screenW / 2 - 50, newBaseX));
+                
+                // 2. Paddle Angle (Relative)
+                // Map a vertical drag of +/- 150px to the max angle
+                const normalizedY = Math.max(-1, Math.min(1, y / 150));
+                player1.rotation = normalizedY * MAX_PADDLE_ANGLE;
+                
+            } else {
+                // mode === 'absolute' (Original desktop behavior)
+                // 1. Horizontal Paddle Position (Absolute)
+                player1.baseX = Math.max(PADDLE_WIDTH * 2, Math.min(screenW / 2 - 50, x));
+                
+                // 2. Paddle Angle (Absolute)
+                const minY = courtY - PADDLE_HEIGHT * 3;
+                const maxY = courtY - PADDLE_HEIGHT * 0.5;
+                const clampedY = Math.max(minY, Math.min(maxY, y));
+                const centerY = (minY + maxY) / 2;
+                
+                const offsetY = clampedY - centerY;
+                const range = (maxY - minY) / 2;
+                const normalizedY = offsetY / range;
+                
+                player1.rotation = normalizedY * MAX_PADDLE_ANGLE;
+            }
             
-            const minY = courtY - PADDLE_HEIGHT * 3;
-            const maxY = courtY - PADDLE_HEIGHT * 0.5;
-            const clampedY = Math.max(minY, Math.min(maxY, globalY));
-            const centerY = (minY + maxY) / 2;
-            
-            const offsetY = clampedY - centerY;
-            const range = (maxY - minY) / 2;
-            const normalizedY = offsetY / range;
-            
-            player1.rotation = normalizedY * MAX_PADDLE_ANGLE;
-            
+            // Update UI (common to both modes)
             const angleDeg = player1.rotation * 180 / Math.PI;
             let shotType = 'FLAT';
             if (angleDeg < -10) shotType = 'SLICE ↓';
@@ -200,11 +270,15 @@
         function updatePlayerSwing(delta) {
             const p1 = player1;
             
+            // Clear the line each frame; it will be redrawn if charging
+            contactLine.clear();
+
             if (state.shotCharging) {
                 const chargeRatio = Math.min(1, state.shotPower / MAX_SHOT_POWER);
                 p1.x = p1.baseX - chargeRatio * SWING_DISTANCE;
                 p1.scale.set(1 - chargeRatio * 0.4, 1 + chargeRatio * 0.2);
                 
+                // Redraw paddle with glow effects
                 p1.clear();
                 p1.rect(-PADDLE_WIDTH / 2, -PADDLE_HEIGHT / 2, PADDLE_WIDTH, PADDLE_HEIGHT);
                 p1.fill(p1.paddleColor);
@@ -220,6 +294,17 @@
                     p1.circle(0, 0, PADDLE_HEIGHT / 2 + 10);
                     p1.stroke({ width: 2, color: 0xFF0000, alpha: pulse * 0.8 });
                 }
+
+                // --- Draw the inclined contact line ---
+                const lineLength = PADDLE_HEIGHT * 1.25;
+                contactLine.rect(-1, -lineLength / 2, 2, lineLength);
+                contactLine.fill({ color: 0x00FFFF, alpha: chargeRatio * 0.8 });
+                
+                // Position and rotate the line to match the paddle's target state
+                // CORRECTED: Place the line in the middle of the forward swing arc
+                contactLine.x = p1.baseX + (SWING_DISTANCE * 1.5) / 2; 
+                contactLine.y = p1.y;
+                contactLine.rotation = p1.rotation;
             }
             
             if (!p1.swing.active) return;
@@ -236,7 +321,6 @@
             const hitboxHeight = PADDLE_HEIGHT * 1.5;
             
             const ballSide = getBallSide();
-            // Player can hit the ball any time it's on their side
             const canHit = ballSide === 'player1'; 
             
             if (canHit && circleRectCollision(ball.x, ball.y, BALL_RADIUS, p1.x, p1.y, hitboxWidth, hitboxHeight)) { 
@@ -244,7 +328,6 @@
                 p1.swing.active = false; 
                 p1.x = p1.baseX; 
             } 
-            // Removed the 'else if (!canHit...)' block that applied the penalty
             
             if (p1.swing.progress >= SWING_DURATION) { 
                 p1.swing.active = false; 
@@ -286,7 +369,8 @@
             }
             
             state.bounces = 0; 
-            state.lastSideHit = getBallSide();
+            state.lastPaddleHitSide = getBallSide();
+            state.lastBounceSide = null;
             state.mustBounceBeforeHit = true;
             state.hasBouncedOnCurrentSide = false;
             state.shotPower = 0;
@@ -545,17 +629,23 @@
                 }
                 
                 const netX = screenW / 2;
-                const netY = courtY - NET_HEIGHT;
-                if (Math.abs(ball.x - netX) < NET_WIDTH / 2 + BALL_RADIUS && 
-                    ball.y > netY - BALL_RADIUS && ball.y < courtY) {
-                    
-                    if (ball.y < netY + 20) {
-                        ball.vy = -Math.abs(ball.vy) * 0.4;
-                        ball.vx *= 0.6;
-                        ball.y = netY - BALL_RADIUS - 3;
-                    } else {
-                        ball.vx *= -0.3;
-                        ball.x += ball.vx > 0 ? 10 : -10;
+                const netTopY = courtY - NET_HEIGHT;
+
+                // A much more robust net collision check
+                if (Math.abs(ball.x - netX) < NET_WIDTH / 2 + BALL_RADIUS && ball.y > netTopY) {
+                    // Reverse horizontal velocity and dampen it
+                    ball.vx *= -0.5;
+
+                    // Push the ball out of the net to prevent it getting stuck
+                    if (ball.x < netX) { // Hit from player's side
+                        ball.x = netX - (NET_WIDTH / 2 + BALL_RADIUS);
+                    } else { // Hit from AI's side
+                        ball.x = netX + (NET_WIDTH / 2 + BALL_RADIUS);
+                    }
+
+                    // If the ball hits the top tape, give it a slight, unpredictable pop
+                    if (ball.y < netTopY + 10) {
+                        ball.vy = -Math.abs(ball.vy) * 0.4 - Math.random() * 3;
                     }
                 }
             }
