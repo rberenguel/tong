@@ -424,7 +424,8 @@
         function startServe() {
             hideMessage();
             state.bounces = 0; 
-            state.lastSideHit = null;
+            state.lastPaddleHitSide = null; // Correctly reset
+            state.lastBounceSide = null;    // Correctly reset
             state.ballSpin = 0;
             state.mustBounceBeforeHit = false;
             state.hasBouncedOnCurrentSide = false;
@@ -491,7 +492,7 @@
             }
         }
 
-        function aiLogic(delta) {
+       function aiLogic(delta) {
             const p2 = player2, screenW = app.screen.width;
             
             if (!state.ballInPlay || getBallSide() === 'player1' || ball.vx <= 0) { 
@@ -552,12 +553,10 @@
                 const courtY = app.screen.height * COURT_Y_FACTOR;
                 const ballHeight = courtY - ball.y;
                 
-                // MORE POWER for low balls to clear net
                 const basePower = ballHeight < 100 ? 16 : 13;
                 const power = basePower + Math.random() * 3;
                 const angle = p2.rotation;
                 
-                // MUCH MORE vertical component when ball is low
                 let verticalBoost = ballHeight < 100 ? 1.2 : 0.75;
                 
                 ball.vx = -Math.cos(angle) * power;
@@ -566,7 +565,8 @@
                 state.ballSpin = Math.random() > 0.6 ? (Math.random() > 0.5 ? 1 : -1) : 0;
                 
                 state.bounces = 0; 
-                state.lastSideHit = getBallSide();
+                state.lastPaddleHitSide = getBallSide(); // Use the correct variable
+                state.lastBounceSide = null;             // Reset bounce tracking
                 state.mustBounceBeforeHit = true;
                 state.hasBouncedOnCurrentSide = false;
                 
@@ -590,7 +590,7 @@
             }
         }
 
-        function gameLoop(ticker) {
+function gameLoop(ticker) {
             if (state.gameOver) return;
             
             let delta = ticker.deltaTime || 1;
@@ -616,24 +616,34 @@
                 ball.y += ball.vy * ballDelta;
                 const screenW = app.screen.width, screenH = app.screen.height;
                 const courtY = screenH * COURT_Y_FACTOR; 
-                const ballSide = getBallSide();
                 
+                // --- CORRECTED: Bounce and Scoring Logic ---
                 if (ball.y + BALL_RADIUS >= courtY) {
                     ball.y = courtY - BALL_RADIUS; 
                     ball.vy *= -0.75;
                     ball.vx *= 0.92;
                     
+                    const bounceSide = getBallSide();
+
+                    // PRIMARY RULE: If ball bounces on the hitter's side, they lose the point.
+                    if (state.lastPaddleHitSide === bounceSide) {
+                        const winner = bounceSide === 'player1' ? 'player2' : 'player1';
+                        pointOver(winner);
+                        return; // Exit early, the point is over.
+                    }
+
+                    // SECONDARY RULE: If it's a legal bounce, count it.
                     state.hasBouncedOnCurrentSide = true;
-                    
-                    if (state.lastSideHit !== null && state.lastSideHit === ballSide) {
+                    if (state.lastBounceSide !== bounceSide) {
+                        state.bounces = 1;
+                        state.lastBounceSide = bounceSide;
+                    } else {
                         state.bounces++;
-                    } else { 
-                        state.lastSideHit = ballSide; 
-                        state.bounces = 1; 
                     }
                     
+                    // TERTIARY RULE: If it's the second bounce on the opponent's side, point is over.
                     if (state.bounces >= 2) {
-                        pointOver(ballSide === 'player1' ? 'player2' : 'player1');
+                        pointOver(bounceSide === 'player1' ? 'player2' : 'player1');
                     }
                 }
                 
@@ -642,26 +652,31 @@
                     ball.vy *= -0.8; 
                 }
                 
-                if (ball.x + BALL_RADIUS < 0 || ball.x - BALL_RADIUS > screenW) { 
-                    pointOver(ball.x < 0 ? 'player2' : 'player1'); 
+                if (ball.x + BALL_RADIUS < 0 || ball.x - BALL_RADIUS > screenW) {
+                    if (state.lastPaddleHitSide) {
+                        const lastHitter = state.lastPaddleHitSide;
+                        const opponent = lastHitter === 'player1' ? 'player2' : 'player1';
+                        if (state.lastBounceSide === opponent) {
+                            pointOver(lastHitter);
+                        } else {
+                            pointOver(opponent);
+                        }
+                    } else {
+                        pointOver(ball.x < screenW / 2 ? 'player2' : 'player1');
+                    }
                 }
                 
                 const netX = screenW / 2;
                 const netTopY = courtY - NET_HEIGHT;
 
-                // A much more robust net collision check
                 if (Math.abs(ball.x - netX) < NET_WIDTH / 2 + BALL_RADIUS && ball.y > netTopY) {
-                    // Reverse horizontal velocity and dampen it
                     ball.vx *= -0.5;
-
-                    // Push the ball out of the net to prevent it getting stuck
-                    if (ball.x < netX) { // Hit from player's side
+                    ball.vy *= 0.6; 
+                    if (ball.x < netX) {
                         ball.x = netX - (NET_WIDTH / 2 + BALL_RADIUS);
-                    } else { // Hit from AI's side
+                    } else {
                         ball.x = netX + (NET_WIDTH / 2 + BALL_RADIUS);
                     }
-
-                    // If the ball hits the top tape, give it a slight, unpredictable pop
                     if (ball.y < netTopY + 10) {
                         ball.vy = -Math.abs(ball.vy) * 0.4 - Math.random() * 3;
                     }
