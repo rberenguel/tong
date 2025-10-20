@@ -253,7 +253,8 @@
           BASE_PADDLE_CONTROL_Y_DIV = 150,
           BASE_AI_CENTER_MARGIN = 50,
           BASE_PADDLE_Y_MARGIN = 10,
-          BASE_AI_PADDLE_MIN_X_MARGIN = 50;
+          BASE_AI_PADDLE_MIN_X_MARGIN = 50,
+          BASE_AI_NET_CLEARANCE_VY = 0.75;
 
 
         // --- Dynamic Scaled Constants ---
@@ -286,7 +287,8 @@
           PADDLE_CONTROL_Y_DIV,
           AI_CENTER_MARGIN,
           PADDLE_Y_MARGIN,
-          AI_PADDLE_MIN_X_MARGIN;
+          AI_PADDLE_MIN_X_MARGIN,
+          AI_NET_CLEARANCE_VY;
 
 
 
@@ -429,6 +431,8 @@
           AI_CENTER_MARGIN = BASE_AI_CENTER_MARGIN * scaleFactor;
           PADDLE_Y_MARGIN = BASE_PADDLE_Y_MARGIN * scaleFactor;
           AI_PADDLE_MIN_X_MARGIN = BASE_AI_PADDLE_MIN_X_MARGIN * scaleFactor;
+          AI_NET_CLEARANCE_VY = BASE_AI_NET_CLEARANCE_VY * scaleFactor;
+
 
 
 
@@ -1059,7 +1063,7 @@
                 vy * timeToNet +
                 0.5 * effectiveGravity * timeToNet * timeToNet;
               if (netBallY > netY - BALL_RADIUS * 3) {
-                vy -= 0.75;
+                vy -= AI_NET_CLEARANCE_VY;
               }
             }
 
