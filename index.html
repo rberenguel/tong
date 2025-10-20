@@ -995,9 +995,12 @@
           const serveContactHeight = courtY - NET_HEIGHT * 1.3;
           const isInServeWindow =
             isAiServing && ball.vy > 0 && ball.y > serveContactHeight;
+          //const isInRallyWindow =
+          //  !isAiServing && ball.y > courtY - NET_HEIGHT; // ball.vy < 0
           const isInRallyWindow =
-            !isAiServing && ball.y > courtY - NET_HEIGHT * 0.8;
-
+            !isAiServing &&
+            state.hasBouncedOnCurrentSide &&
+            (ball.vy >= 0 || ball.y > courtY - NET_HEIGHT * 1.5);
           if (
             state.aiCanHit &&
             canHit &&

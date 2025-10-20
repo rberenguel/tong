@@ -2,7 +2,7 @@
   "name": "tong",
   "short_name": "tong",
   "author": "Ruben Berenguel",
-  "version": "0.3.0-rc",
+  "version": "0.0.1",
   "description": "Tennis + Pong",
   "start_url": "./index.html",
   "display": "standalone",
