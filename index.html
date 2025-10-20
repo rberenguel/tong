@@ -1092,7 +1092,7 @@
           if (state.gameOver || !gameStarted) return;
 
           const delta = ticker.deltaTime || 1;
-          const gameDelta = delta * GAME_SPEED_MODIFIER; // Master delta for all physics
+          const gameDelta = delta * GAME_SPEED_MODIFIER;
 
           const timeScale = state.shotCharging ? 0.4 : 1.0;
           const ballDelta = gameDelta * timeScale;
@@ -1104,8 +1104,8 @@
             );
           }
 
-          updatePaddlePositions(gameDelta); // Use gameDelta for smooth, consistent paddle speed
-          updatePlayerSwing(delta); // Swing animation uses raw delta for consistent timing
+          updatePaddlePositions(gameDelta);
+          updatePlayerSwing(delta);
           updateTrail();
 
           for (let i = particles.length - 1; i >= 0; i--) {
@@ -1143,8 +1143,22 @@
 
             if (ball.y + BALL_RADIUS >= courtY) {
               ball.y = courtY - BALL_RADIUS;
-              ball.vy *= -0.75;
-              ball.vx *= 0.92;
+
+              // --- MODIFICATION START: Spin-dependent bounce physics ---
+              if (state.ballSpin < 0) {
+                // Slice (backspin)
+                ball.vy *= -0.55; // Stays very low
+                ball.vx *= 0.88; // Loses more forward speed (skids)
+              } else if (state.ballSpin > 0) {
+                // Topspin
+                ball.vy *= -0.8; // Bounces higher
+                ball.vx *= 0.96; // Retains more forward speed (kicks)
+              } else {
+                // Flat
+                ball.vy *= -0.75; // Normal bounce
+                ball.vx *= 0.92;
+              }
+              // --- MODIFICATION END ---
 
               const bounceSide = getBallSide();
 
@@ -1189,7 +1203,6 @@
 
             const netX = screenW / 2;
             const netTopY = courtY - NET_HEIGHT;
-            const netBottomY = courtY;
 
             const crossedNet =
               (ball.prevX < netX && ball.x >= netX) ||
@@ -1211,8 +1224,6 @@
                     -Math.abs(ball.vy) * 0.4 -
                     Math.random() * NET_BOUNCE_VY_ADD;
                 }
-
-                console.log("🎾 NET HIT at y:", crossY.toFixed(1));
               }
             }
           }
