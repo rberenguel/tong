@@ -44,7 +44,7 @@
         const PADDLE_SPEED = 0.35;
         const AI_PADDLE_SPEED_X = 0.08;
 
-        const PLAYER_COLOR_HEX = '#00FFFF'; // Player 1 color
+        const PLAYER_COLOR_HEX = '#00FFFF';
         const AI_COLOR_HEX = '#FFA500';
         
         const scoreElement = document.getElementById('score');
@@ -55,7 +55,8 @@
         let app, player1, player2, ball, net, floor, trail, contactLine;
         let state = {};
         let trailPoints = [];
-        let touchState = {}; // <-- Add this
+        let touchState = {};
+        let AI_DIFFICULTY = 'beginner'; // 'beginner', 'medium', or 'god'
 
         function initializeGameState() {
             state = {
@@ -68,7 +69,8 @@
                 ballSpin: 0,
                 lastShotType: undefined,
                 mustBounceBeforeHit: false,
-                hasBouncedOnCurrentSide: false
+                hasBouncedOnCurrentSide: false,
+                aiWillMiss: false,
             };
             
             touchState = {
@@ -85,7 +87,7 @@
             floor = new PIXI.Graphics(); 
             net = new PIXI.Graphics();
             trail = new PIXI.Graphics();
-            contactLine = new PIXI.Graphics(); // <-- Add this
+            contactLine = new PIXI.Graphics();
             
             player1 = createPaddle(0x00FFFF); 
             player2 = createPaddle(0xFFA500);
@@ -95,8 +97,10 @@
             ball.fill(0xFFFF00);
             ball.vx = 0;
             ball.vy = 0;
+            ball.prevX = 0;
+ball.prevY = 0;
             
-            app.stage.addChild(floor, net, trail, contactLine, player1, player2, ball); // <-- Add contactLine here
+            app.stage.addChild(floor, net, trail, contactLine, player1, player2, ball);
         }
 
         function resizeAndPosition() {
@@ -138,26 +142,24 @@
             const handlePointerDown = e => {
                 if (state.gameOver) return;
 
-                // Desktop: Mouse click anywhere starts charging
                 if (e.pointerType === 'mouse') {
                     if (state.ballInPlay && !player1.swing.active && !state.shotCharging) {
                         startShotCharge();
                     }
-                    return; // Done for mouse input
+                    return;
                 }
 
-                // Mobile: Touch uses split screen logic
                 const screenW = app.screen.width;
                 const x = e.global.x;
 
-                if (x < screenW / 2) { // Left side: Control paddle
+                if (x < screenW / 2) {
                     if (!state.shotCharging && !player1.swing.active) {
                         touchState.isMovingPaddle = true;
                         touchState.startX = x;
                         touchState.startY = e.global.y;
                         touchState.startPaddleX = player1.baseX;
                     }
-                } else { // Right side: Charge shot
+                } else {
                     if (state.ballInPlay && !player1.swing.active && !touchState.isCharging) {
                         touchState.isCharging = true;
                         startShotCharge();
@@ -166,23 +168,19 @@
             };
             
             const handlePointerUp = () => { 
-                // This now works for both mouse and touch release
                 if (state.shotCharging) {
                     releaseShot(); 
                 }
-                // Reset touch-specific state regardless
                 touchState.isCharging = false;
                 touchState.isMovingPaddle = false;
             };
             
             const handlePointerMove = e => { 
                 if (touchState.isMovingPaddle) {
-                    // Relative control for an active touch drag
                     const deltaX = e.global.x - touchState.startX;
                     const deltaY = e.global.y - touchState.startY;
                     updatePaddleControl(deltaX, deltaY, 'relative');
                 } else if (e.pointerType === 'mouse') {
-                    // Absolute control for desktop mouse whenever it moves
                     updatePaddleControl(e.global.x, e.global.y, 'absolute');
                 }
             };
@@ -192,7 +190,6 @@
             app.stage.on('pointerupoutside', handlePointerUp);
             app.stage.on('pointermove', handlePointerMove);
             
-            // Keyboard controls remain unchanged
             window.addEventListener('keydown', (e) => {
                 if (e.code === 'Space' && !state.shotCharging && state.ballInPlay && !state.gameOver) {
                     e.preventDefault();
@@ -214,22 +211,15 @@
             const courtY = screenH * COURT_Y_FACTOR;
             
             if (mode === 'relative') {
-                // x is deltaX, y is deltaY
-                // 1. Horizontal Paddle Position (Relative)
                 const newBaseX = touchState.startPaddleX + x;
                 player1.baseX = Math.max(PADDLE_WIDTH * 2, Math.min(screenW / 2 - 50, newBaseX));
                 
-                // 2. Paddle Angle (Relative)
-                // Map a vertical drag of +/- 150px to the max angle
                 const normalizedY = Math.max(-1, Math.min(1, y / 150));
                 player1.rotation = normalizedY * MAX_PADDLE_ANGLE;
                 
             } else {
-                // mode === 'absolute' (Original desktop behavior)
-                // 1. Horizontal Paddle Position (Absolute)
                 player1.baseX = Math.max(PADDLE_WIDTH * 2, Math.min(screenW / 2 - 50, x));
                 
-                // 2. Paddle Angle (Absolute)
                 const minY = courtY - PADDLE_HEIGHT * 3;
                 const maxY = courtY - PADDLE_HEIGHT * 0.5;
                 const clampedY = Math.max(minY, Math.min(maxY, y));
@@ -242,7 +232,6 @@
                 player1.rotation = normalizedY * MAX_PADDLE_ANGLE;
             }
             
-            // Update UI (common to both modes)
             const angleDeg = player1.rotation * 180 / Math.PI;
             let shotType = 'FLAT';
             if (angleDeg < -10) shotType = 'SLICE ↓';
@@ -278,7 +267,6 @@
         function updatePlayerSwing(delta) {
             const p1 = player1;
             
-            // Clear the line each frame; it will be redrawn if charging
             contactLine.clear();
 
             if (state.shotCharging) {
@@ -286,7 +274,6 @@
                 p1.x = p1.baseX - chargeRatio * SWING_DISTANCE;
                 p1.scale.set(1 - chargeRatio * 0.4, 1 + chargeRatio * 0.2);
                 
-                // Redraw paddle with glow effects
                 p1.clear();
                 p1.rect(-PADDLE_WIDTH / 2, -PADDLE_HEIGHT / 2, PADDLE_WIDTH, PADDLE_HEIGHT);
                 p1.fill(p1.paddleColor);
@@ -303,13 +290,10 @@
                     p1.stroke({ width: 2, color: 0xFF0000, alpha: pulse * 0.8 });
                 }
 
-                // --- Draw the inclined contact line ---
                 const lineLength = PADDLE_HEIGHT * 1.25;
                 contactLine.rect(-1, -lineLength / 2, 2, lineLength);
                 contactLine.fill({ color: 0x00FFFF, alpha: chargeRatio * 0.8 });
                 
-                // Position and rotate the line to match the paddle's target state
-                // CORRECTED: Place the line in the middle of the forward swing arc
                 contactLine.x = p1.baseX + (SWING_DISTANCE * 1.5) / 2; 
                 contactLine.y = p1.y;
                 contactLine.rotation = p1.rotation;
@@ -362,7 +346,6 @@
                 spinValue = 1;
             }
             
-            // CORRECTED: Apply a power penalty for slice shots
             if (shotType === 'slice') {
                 power *= 0.75; 
             }
@@ -424,8 +407,8 @@
         function startServe() {
             hideMessage();
             state.bounces = 0; 
-            state.lastPaddleHitSide = null; // Correctly reset
-            state.lastBounceSide = null;    // Correctly reset
+            state.lastPaddleHitSide = null;
+            state.lastBounceSide = null;
             state.lastShotType = undefined;
             state.ballSpin = 0;
             state.mustBounceBeforeHit = false;
@@ -457,31 +440,25 @@
                 player1.targetY = courtY - NET_HEIGHT / 2;
             }
             
-            // AI tracks ball on its side
             let targetX_AI;
             
             if (state.ballInPlay && ball.x >= screenW / 2) {
-                // Calculate target X
                 const minX = screenW / 2 + 50;
                 const maxX = screenW - PADDLE_WIDTH * 2;
                 targetX_AI = Math.max(minX, Math.min(maxX, ball.x));
                 
-                // Calculate target Y
                 if (ball.y > minY && ball.y < maxY) {
                     player2.targetY = ball.y;
                 } else {
                     player2.targetY = courtY - NET_HEIGHT / 2;
                 }
             } else {
-                // Return to default position
                 targetX_AI = screenW * 0.8;
                 player2.targetY = courtY - NET_HEIGHT / 2;
             }
             
-            // Interpolate AI horizontal movement (slower)
             player2.baseX += (targetX_AI - player2.baseX) * AI_PADDLE_SPEED_X;
             
-            // Apply vertical auto-position interpolation (fast)
             player1.y += (player1.targetY - player1.y) * PADDLE_SPEED;
             player2.y += (player2.targetY - player2.y) * PADDLE_SPEED;
             
@@ -493,14 +470,47 @@
             }
         }
 
-function aiLogic(delta) {
-            const p2 = player2, screenW = app.screen.width;
+        function aiLogic(delta) {
+            const p2 = player2, screenW = app.screen.width, screenH = app.screen.height;
+            const courtY = screenH * COURT_Y_FACTOR;
             
             if (!state.ballInPlay || getBallSide() === 'player1' || ball.vx <= 0) { 
-                p2.rotation *= 0.85; 
+                p2.rotation *= 0.85;
+                state.aiWillMissThisShot = undefined; 
                 return; 
             }
             
+               let targetAccuracy, targetSpread, velocityError, missChance;
+
+if (AI_DIFFICULTY === 'beginner') {
+    targetAccuracy = 0.4;    // 30% of court width for target zone
+    targetSpread = 0.3;     // ±15% position error
+    velocityError = 0.5;    // ±25% velocity error
+    missChance = 0.3;       // 15% chance to completely miss
+} else if (AI_DIFFICULTY === 'medium') {
+    targetAccuracy = 0.3;
+    targetSpread = 0.15;
+    velocityError = 0.25;
+    missChance = 0.15;
+} else { // 'god'
+    targetAccuracy = 0.15;
+    targetSpread = 0.02;
+    velocityError = 0.03;
+    missChance = 0;
+}
+
+if (state.aiWillMissThisShot === undefined && state.mustBounceBeforeHit && !state.hasBouncedOnCurrentSide) {
+        // Ball just entered AI's side, decide now
+        state.aiWillMissThisShot = Math.random() < missChance;
+        if (state.aiWillMissThisShot) console.log('🤖 AI decided to whiff this one');
+    }
+    if(!state.lastShotType && state.aiWillMissThisShot){
+        console.log("🤖 D'oh, needs to make serves")
+        state.aiWillMissThisShot = false;
+    }
+    if (state.aiWillMissThisShot) {
+        return;
+    }
             p2.rotation = 0; 
 
             const hitboxWidth = PADDLE_WIDTH * 3;
@@ -511,7 +521,6 @@ function aiLogic(delta) {
             
             let shouldHit = canHit;
             if (state.mustBounceBeforeHit && !state.hasBouncedOnCurrentSide) {
-                const courtY = app.screen.height * COURT_Y_FACTOR;
                 const gravityMult = state.ballSpin > 0 ? TOPSPIN_GRAVITY_MULT : state.ballSpin < 0 ? SLICE_GRAVITY_MULT : 1;
                 let t = 0, testX = ball.x, testY = ball.y, testVY = ball.vy;
                 while (testY < courtY && testX < screenW && t < 200) {
@@ -523,7 +532,7 @@ function aiLogic(delta) {
                 shouldHit = testX < screenW && testY >= courtY;
                 if (!shouldHit) console.log('🤖 AI letting ball go out');
             }
-            
+
             if (shouldHit && circleRectCollision(ball.x, ball.y, BALL_RADIUS, p2.x, p2.y, hitboxWidth, hitboxHeight)) {
                 if (state.lastPaddleHitSide === 'player2') {
                     console.log('🤖 FAULT: Double Touch');
@@ -531,46 +540,77 @@ function aiLogic(delta) {
                     return;
                 }
 
-                const courtY = app.screen.height * COURT_Y_FACTOR;
-                const ballHeight = courtY - ball.y;
-                const distFromNet = p2.x - screenW / 2;
+                // Pick target landing zone in opponent's court
+ 
+
+
+// Pick target with accuracy-based spread
+const baseTargetX = screenW * 0.25 + Math.random() * screenW * targetAccuracy;
+const targetX = baseTargetX + (Math.random() - 0.5) * screenW * targetSpread;
+const targetY = courtY - 5;
                 
-                let power, angle, shotType;
-                let returnTopspin = false;
-
-                // --- NEW: Smarter Shot Selection Logic ---
-                // If the player hits topspin, the AI is 80% likely to return topspin, creating a rally.
-                if (state.lastShotType === 'topspin' && Math.random() < 0.8) {
-                    returnTopspin = true;
-                }
-
-                // Decide shot based on the new logic or the old height-based logic.
-                if (returnTopspin || (ballHeight > NET_HEIGHT * 1.5 && Math.random() > 0.3)) {
+                // Calculate trajectory needed
+                const dx = targetX - ball.x;
+                const dy = targetY - ball.y;
+                
+                // Decide shot type
+                let shotType, spinValue;
+                let returnTopspin = (state.lastShotType === 'topspin' && Math.random() < 0.8);
+                
+                if (returnTopspin || (courtY - ball.y > NET_HEIGHT * 1.5 && Math.random() > 0.3)) {
                     shotType = 'Topspin/Flat';
-                    power = 16 + (distFromNet / (screenW / 2)) * 5 + Math.random() * 3;
-                    angle = 0.05 + Math.random() * 0.15; // Aggressive but still upward angle
-                    state.ballSpin = 1;
+                    spinValue = 1;
                 } else {
                     shotType = 'Slice';
-                    power = 14 + (distFromNet / (screenW / 2)) * 4;
-                    angle = 0.25; // Defensive upward angle
-                    if (ballHeight < NET_HEIGHT * 2) {
-                         angle += (1 - (ballHeight / (NET_HEIGHT * 2))) * 0.6;
+                    spinValue = -1;
+                }
+                
+                if (!state.lastShotType) {
+                    shotType = 'Slice';
+                    spinValue = -1;
+                }
+                
+                state.ballSpin = spinValue;
+                
+                // Calculate required trajectory with physics
+                const gravityMult = spinValue > 0 ? TOPSPIN_GRAVITY_MULT : spinValue < 0 ? SLICE_GRAVITY_MULT : 1;
+                const effectiveGravity = GRAVITY * gravityMult;
+                
+                // Use physics to calculate time to reach target
+                const flightTime = Math.abs(dx) / 15;
+                
+                // Calculate required velocities
+                let vx = dx / flightTime;
+                let vy = (dy - 0.5 * effectiveGravity * flightTime * flightTime) / flightTime;
+                
+                // Make sure we clear the net
+                const netX = screenW / 2;
+                const netY = courtY - NET_HEIGHT;
+                const timeToNet = (netX - ball.x) / vx;
+                
+                if (timeToNet > 0 && timeToNet < flightTime) {
+                    const netBallY = ball.y + vy * timeToNet + 0.5 * effectiveGravity * timeToNet * timeToNet;
+                    const clearance = netY - netBallY;
+                    
+                    if (clearance < 15) {
+                        vy -= (clearance - 20) / timeToNet;
                     }
-                    angle += (Math.random() - 0.5) * 0.1;
-                    state.ballSpin = -1;
                 }
+                
+                // Clamp velocities to reasonable values
+                vx *= (1 + (Math.random() - 0.5) * velocityError);
+vy *= (1 + (Math.random() - 0.5) * velocityError);
 
-                if(!state.lastShotType){
-                    // Slice when serving
-                    shotType = 'Slice'
-                }
+// Clamp velocities to reasonable values
+vx = Math.max(-25, Math.min(-8, vx));
+vy = Math.max(-20, Math.min(-5, vy));
                 
-                angle = Math.max(-0.4, Math.min(angle, 0.9));
-                p2.rotation = angle;
+                ball.vx = vx;
+                ball.vy = vy;
                 
-                ball.vx = -Math.cos(angle) * power;
-                ball.vy = -Math.sin(angle) * power;
+                // Update paddle rotation for visual
+                const angle = Math.atan2(-vy, -vx);
+                p2.rotation = Math.max(-0.4, Math.min(0.9, angle));
                 
                 state.bounces = 0; 
                 state.lastPaddleHitSide = getBallSide();
@@ -578,7 +618,7 @@ function aiLogic(delta) {
                 state.mustBounceBeforeHit = true;
                 state.hasBouncedOnCurrentSide = false;
                 
-                console.log(`🤖 AI ${shotType} | height:`, ballHeight.toFixed(0), '| power:', power.toFixed(1), '| angle:', (angle * 180 / Math.PI).toFixed(0), '°');
+                console.log(`🤖 AI ${shotType} | target: ${targetX.toFixed(0)} | vx: ${vx.toFixed(1)} | vy: ${vy.toFixed(1)}`);
             }
         }
 
@@ -598,7 +638,7 @@ function aiLogic(delta) {
             }
         }
 
-function gameLoop(ticker) {
+        function gameLoop(ticker) {
             if (state.gameOver) return;
             
             let delta = ticker.deltaTime || 1;
@@ -625,7 +665,6 @@ function gameLoop(ticker) {
                 const screenW = app.screen.width, screenH = app.screen.height;
                 const courtY = screenH * COURT_Y_FACTOR; 
                 
-                // --- CORRECTED: Bounce and Scoring Logic ---
                 if (ball.y + BALL_RADIUS >= courtY) {
                     ball.y = courtY - BALL_RADIUS; 
                     ball.vy *= -0.75;
@@ -633,14 +672,12 @@ function gameLoop(ticker) {
                     
                     const bounceSide = getBallSide();
 
-                    // PRIMARY RULE: If ball bounces on the hitter's side, they lose the point.
                     if (state.lastPaddleHitSide === bounceSide) {
                         const winner = bounceSide === 'player1' ? 'player2' : 'player1';
                         pointOver(winner);
-                        return; // Exit early, the point is over.
+                        return;
                     }
 
-                    // SECONDARY RULE: If it's a legal bounce, count it.
                     state.hasBouncedOnCurrentSide = true;
                     if (state.lastBounceSide !== bounceSide) {
                         state.bounces = 1;
@@ -649,7 +686,6 @@ function gameLoop(ticker) {
                         state.bounces++;
                     }
                     
-                    // TERTIARY RULE: If it's the second bounce on the opponent's side, point is over.
                     if (state.bounces >= 2) {
                         pointOver(bounceSide === 'player1' ? 'player2' : 'player1');
                     }
@@ -674,21 +710,35 @@ function gameLoop(ticker) {
                     }
                 }
                 
-                const netX = screenW / 2;
-                const netTopY = courtY - NET_HEIGHT;
+                // Net collision - check line segment intersection
+const netX = screenW / 2;
+const netTopY = courtY - NET_HEIGHT;
+const netBottomY = courtY;
 
-                if (Math.abs(ball.x - netX) < NET_WIDTH / 2 + BALL_RADIUS && ball.y > netTopY) {
-                    ball.vx *= -0.5;
-                    ball.vy *= 0.6; 
-                    if (ball.x < netX) {
-                        ball.x = netX - (NET_WIDTH / 2 + BALL_RADIUS);
-                    } else {
-                        ball.x = netX + (NET_WIDTH / 2 + BALL_RADIUS);
-                    }
-                    if (ball.y < netTopY + 10) {
-                        ball.vy = -Math.abs(ball.vy) * 0.4 - Math.random() * 3;
-                    }
-                }
+// Check if ball crossed the net plane between frames
+const crossedNet = (ball.prevX < netX && ball.x >= netX) || (ball.prevX > netX && ball.x <= netX);
+
+if (crossedNet) {
+    // Calculate where the ball was when it crossed the net's X position
+    const t = (netX - ball.prevX) / (ball.x - ball.prevX);
+    const crossY = ball.prevY + t * (ball.y - ball.prevY);
+    
+    // Check if it hit the net (not above it)
+    if (crossY > netTopY - BALL_RADIUS) {
+        // Ball hit the net!
+        ball.x = ball.prevX < netX ? netX - BALL_RADIUS : netX + BALL_RADIUS;
+        ball.y = crossY;
+        ball.vx *= -0.5;
+        ball.vy *= 0.6;
+        
+        // If very close to top, bounce it up
+        if (crossY < netTopY + 10) {
+            ball.vy = -Math.abs(ball.vy) * 0.4 - Math.random() * 3;
+        }
+        
+        console.log('🎾 NET HIT at y:', crossY.toFixed(1));
+    }
+}
             }
         }
 
@@ -700,55 +750,76 @@ function gameLoop(ticker) {
             resetRound();
         }
 
-        function updateScore(winner, loser) {
-            const p1Score = state.scores.player1, p2Score = state.scores.player2;
-            const winnerPoints = state.scores[winner].points, loserPoints = state.scores[loser].points;
-            if (winnerPoints >= 4 && winnerPoints - loserPoints >= 2) {
-                p1Score.points = 0; p2Score.points = 0; state.scores[winner].games++;
-                if (state.scores[winner].games >= 6 && state.scores[winner].games - state.scores[loser].games >= 2) {
-                    p1Score.games = 0; p2Score.games = 0; state.scores[winner].sets++;
-                    if (state.scores[winner].sets >= 2) { 
-                        state.gameOver = true; 
-                        showMessage(`${winner === 'player1' ? 'YOU' : 'AI'} WIN!`, true); 
-                    }
-                }
-            }
-            updateScoreUI();
-        }
-
-        function updateScoreUI() {
-            const p1s = state.scores.player1, p2s = state.scores.player2; 
-            const tennisPoints = ["0", "15", "30", "40"];
-            let scoreHTML;
-
-            // Handle Deuce and Advantage scores, which take over the point display
-            if (p1s.points >= 3 && p2s.points >= 3) {
-                if (p1s.points === p2s.points) { 
-                    scoreHTML = "Deuce"; // Neutral color for Deuce
-                } else if (p1s.points > p2s.points) { 
-                    scoreHTML = `<span style="color: ${PLAYER_COLOR_HEX};">Advantage Player</span>`;
-                } else { 
-                    scoreHTML = `<span style="color: ${AI_COLOR_HEX};">Advantage AI</span>`;
-                }
-            } else { 
-                // Handle regular point scores
-                const p1Display = `<span style="color: ${PLAYER_COLOR_HEX};">${tennisPoints[p1s.points]}</span>`;
-                const p2Display = `<span style="color: ${AI_COLOR_HEX};">${tennisPoints[p2s.points]}</span>`;
-                scoreHTML = `${p1Display} - ${p2Display}`;
-            }
+       function updateScore(winner, loser) {
+    const p1Score = state.scores.player1, p2Score = state.scores.player2;
+    const winnerPoints = state.scores[winner].points, loserPoints = state.scores[loser].points;
+    
+    // Switch serve every 2 points (table tennis rules)
+    const totalPoints = p1Score.points + p2Score.points;
+    if (totalPoints > 0 && totalPoints % 2 === 0) {
+        state.servingPlayer = state.servingPlayer === 'player1' ? 'player2' : 'player1';
+    }
+    
+    // In deuce (10-10+), switch every point
+    if (p1Score.points >= 10 && p2Score.points >= 10) {
+        state.servingPlayer = state.servingPlayer === 'player1' ? 'player2' : 'player1';
+    }
+    
+    if (winnerPoints >= 11 && winnerPoints - loserPoints >= 2) {
+        p1Score.points = 0; 
+        p2Score.points = 0; 
+        state.scores[winner].games++;
+        state.servingPlayer = 'player1'; // Reset to player1 after each game
+        
+        if (state.scores[winner].games >= 6 && state.scores[winner].games - state.scores[loser].games >= 2) {
+            p1Score.games = 0; 
+            p2Score.games = 0; 
+            state.scores[winner].sets++;
             
-            // Build the separate, clear display for Games and Sets
-            const p1Games = `<span style="color: ${PLAYER_COLOR_HEX};">${p1s.games}</span>`;
-            const p2Games = `<span style="color: ${AI_COLOR_HEX};">${p2s.games}</span>`;
-            const p1Sets = `<span style="color: ${PLAYER_COLOR_HEX};">${p1s.sets}</span>`;
-            const p2Sets = `<span style="color: ${AI_COLOR_HEX};">${p2s.sets}</span>`;
-            
-            const setsHTML = `Games: ${p1Games}-${p2Games} | Sets: ${p1Sets}-${p2Sets}`;
-
-            // Update the UI elements
-            scoreElement.innerHTML = scoreHTML; 
-            setsElement.innerHTML = setsHTML;
+            if (state.scores[winner].sets >= 2) { 
+                state.gameOver = true; 
+                showMessage(`${winner === 'player1' ? 'YOU' : 'AI'} WIN!`, true); 
+            }
         }
+    }
+    updateScoreUI();
+}
+
+function updateScoreUI() {
+    const p1s = state.scores.player1, p2s = state.scores.player2; 
+    let scoreHTML;
+
+    // Handle Deuce and Advantage scores
+    if (p1s.points >= 10 && p2s.points >= 10) {
+        const serveBall1 = state.servingPlayer === 'player1' ? ' 🎾' : '';
+        const serveBall2 = state.servingPlayer === 'player2' ? ' 🎾' : '';
+        
+        if (p1s.points === p2s.points) { 
+            scoreHTML = `<span style="color: ${PLAYER_COLOR_HEX};">${p1s.points}${serveBall1}</span> - <span style="color: ${AI_COLOR_HEX};">${p2s.points}${serveBall2}</span>`;
+        } else if (p1s.points > p2s.points) { 
+            scoreHTML = `<span style="color: ${PLAYER_COLOR_HEX};">Advantage Player${serveBall1}</span>`;
+        } else { 
+            scoreHTML = `<span style="color: ${AI_COLOR_HEX};">Advantage AI${serveBall2}</span>`;
+        }
+    } else { 
+        const serveBall1 = state.servingPlayer === 'player1' ? ' 🎾' : '';
+        const serveBall2 = state.servingPlayer === 'player2' ? ' 🎾' : '';
+        
+        const p1Display = `<span style="color: ${PLAYER_COLOR_HEX};">${p1s.points}${serveBall1}</span>`;
+        const p2Display = `<span style="color: ${AI_COLOR_HEX};">${p2s.points}${serveBall2}</span>`;
+        scoreHTML = `${p1Display} - ${p2Display}`;
+    }
+    
+    const p1Games = `<span style="color: ${PLAYER_COLOR_HEX};">${p1s.games}</span>`;
+    const p2Games = `<span style="color: ${AI_COLOR_HEX};">${p2s.games}</span>`;
+    const p1Sets = `<span style="color: ${PLAYER_COLOR_HEX};">${p1s.sets}</span>`;
+    const p2Sets = `<span style="color: ${AI_COLOR_HEX};">${p2s.sets}</span>`;
+    
+    const setsHTML = `Games: ${p1Games}-${p2Games} | Sets: ${p1Sets}-${p2Sets}`;
+
+    scoreElement.innerHTML = scoreHTML; 
+    setsElement.innerHTML = setsHTML;
+}
 
         function resetRound() {
             state.ballInPlay = false; 
@@ -791,7 +862,6 @@ function gameLoop(ticker) {
             return ball.x < app.screen.width / 2 ? 'player1' : 'player2'; 
         }
 
-        // --- Main Execution ---
         app = new PIXI.Application();
         await app.init({ background: 0x000000, resizeTo: window, antialias: true });
         document.body.appendChild(app.canvas);
