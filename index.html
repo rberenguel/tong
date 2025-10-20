@@ -13,14 +13,122 @@
         canvas { display: block; }
         #ui-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
         #score { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); font-size: 48px; text-shadow: 0 0 10px #fff, 0 0 20px #ff00ff, 0 0 30px #ff00ff; }
-        #sets { position: absolute; top: 80px; left: 50%; transform: translateX(-50%); font-size: 24px; color: #ccc; }
+        #sets { position: absolute; top: 80px; left: 50%; transform: translateX(-50%); font-size: 24px; color: #ccc; display: none; }
         #message { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 32px; text-align: center; display: none; text-shadow: 0 0 10px #fff, 0 0 20px #00ffff, 0 0 30px #00ffff; }
         #controls { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); font-size: 14px; color: #666; text-align: center; }
         #shot-indicator { position: absolute; top: 120px; left: 20px; font-size: 18px; color: #0ff; text-shadow: 0 0 5px #0ff; }
+        
+        #intro-screen, #game-over-screen { 
+            position: absolute; 
+            top: 0; 
+            left: 0; 
+            width: 100%; 
+            height: 100%; 
+            background: rgba(0, 0, 0, 0.95); 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            justify-content: center; 
+            z-index: 100; 
+            pointer-events: all;
+            padding: 10px 20px;
+            box-sizing: border-box;
+            overflow-y: auto;
+        }
+        
+        #game-over-screen { display: none; }
+        
+        .title { 
+            font-size: clamp(40px, 12vw, 100px); 
+            margin-bottom: clamp(10px, 2vh, 20px); 
+            text-shadow: 0 0 20px #ff00ff, 0 0 40px #ff00ff, 0 0 60px #ff00ff;
+            letter-spacing: 0.1em;
+        }
+        
+        .instructions { 
+            max-width: 700px; 
+            text-align: center; 
+            font-size: clamp(11px, 2.5vw, 14px); 
+            line-height: 1.1; 
+            margin-bottom: clamp(15px, 3vh, 30px); 
+            color: #aaa;
+            font-family: Arial, sans-serif;
+        }
+        
+        .difficulty-selector { 
+            display: flex; 
+            gap: clamp(8px, 2vw, 15px); 
+            margin-bottom: clamp(10px, 2vh, 20px);
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        
+        .difficulty-btn, .rematch-btn { 
+            padding: clamp(10px, 2vh, 15px) clamp(20px, 4vw, 30px); 
+            font-size: clamp(12px, 2.5vw, 18px); 
+            font-family: 'Sixtyfour', sans-serif; 
+            background: linear-gradient(45deg, #ff00ff, #00ffff); 
+            border: none; 
+            color: #000; 
+            cursor: pointer; 
+            transition: all 0.3s; 
+            text-transform: uppercase;
+            font-weight: bold;
+        }
+        
+        .difficulty-btn:hover, .rematch-btn:hover { 
+            transform: scale(1.1); 
+            box-shadow: 0 0 20px #ff00ff;
+        }
+        
+        .difficulty-btn.selected { 
+            background: linear-gradient(45deg, #00ff00, #00ffff); 
+            box-shadow: 0 0 30px #00ff00;
+        }
+        
+        .game-over-title {
+            font-size: clamp(32px, 10vw, 72px);
+            margin-bottom: 20px;
+            text-shadow: 0 0 20px #00ffff, 0 0 40px #00ffff;
+        }
+        
+        .final-score {
+            font-size: clamp(24px, 6vw, 48px);
+            margin-bottom: 30px;
+            color: #ccc;
+        }
+        
+        .rematch-options {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/8.1.5/pixi.min.js"></script>
 </head>
 <body>
+    <div id="intro-screen">
+        <div class="title">TONG</div>
+        <div class="instructions">
+            A kind of tennis game. Control your paddle with your mouse or finger. 
+            <strong>Hold to charge your shot</strong>, then release to hit the ball. 
+            Angle your paddle to add topspin (↑) or slice (↓). First to 11 points wins!
+        </div>
+        <div class="difficulty-selector">
+            <button class="difficulty-btn" data-difficulty="beginner">BEGINNER</button>
+            <button class="difficulty-btn selected" data-difficulty="medium">MEDIUM</button>
+            <button class="difficulty-btn" data-difficulty="god">GOD</button>
+        </div>
+        <button class="difficulty-btn" id="start-game-btn">START GAME</button>
+    </div>
+    
+    <div id="game-over-screen">
+        <div class="game-over-title"></div>
+        <div class="final-score"></div>
+        <div class="rematch-options"></div>
+    </div>
+    
     <div id="ui-container">
         <div id="score">0 - 0</div>
         <div id="sets">Sets: 0 - 0</div>
@@ -51,12 +159,15 @@
         const setsElement = document.getElementById('sets');
         const messageElement = document.getElementById('message');
         const shotIndicator = document.getElementById('shot-indicator');
+        const introScreen = document.getElementById('intro-screen');
+        const gameOverScreen = document.getElementById('game-over-screen');
 
         let app, player1, player2, ball, net, floor, trail, contactLine;
         let state = {};
         let trailPoints = [];
         let touchState = {};
-        let AI_DIFFICULTY = 'beginner'; // 'beginner', 'medium', or 'god'
+        let AI_DIFFICULTY = 'medium';
+        let gameStarted = false;
 
         function initializeGameState() {
             state = {
@@ -64,7 +175,7 @@
                 lastPaddleHitSide: null, 
                 lastBounceSide: null,    
                 servingPlayer: 'player1',
-                scores: { player1: { points: 0, games: 0, sets: 0 }, player2: { points: 0, games: 0, sets: 0 } },
+                scores: { player1: { points: 0 }, player2: { points: 0 } },
                 gameOver: false,
                 ballSpin: 0,
                 lastShotType: undefined,
@@ -98,7 +209,7 @@
             ball.vx = 0;
             ball.vy = 0;
             ball.prevX = 0;
-ball.prevY = 0;
+            ball.prevY = 0;
             
             app.stage.addChild(floor, net, trail, contactLine, player1, player2, ball);
         }
@@ -480,37 +591,37 @@ ball.prevY = 0;
                 return; 
             }
             
-               let targetAccuracy, targetSpread, velocityError, missChance;
+            let targetAccuracy, targetSpread, velocityError, missChance;
 
-if (AI_DIFFICULTY === 'beginner') {
-    targetAccuracy = 0.4;    // 30% of court width for target zone
-    targetSpread = 0.3;     // ±15% position error
-    velocityError = 0.5;    // ±25% velocity error
-    missChance = 0.3;       // 15% chance to completely miss
-} else if (AI_DIFFICULTY === 'medium') {
-    targetAccuracy = 0.3;
-    targetSpread = 0.15;
-    velocityError = 0.25;
-    missChance = 0.15;
-} else { // 'god'
-    targetAccuracy = 0.15;
-    targetSpread = 0.02;
-    velocityError = 0.03;
-    missChance = 0;
-}
+            if (AI_DIFFICULTY === 'beginner') {
+                targetAccuracy = 0.4;
+                targetSpread = 0.3;
+                velocityError = 0.5;
+                missChance = 0.3;
+            } else if (AI_DIFFICULTY === 'medium') {
+                targetAccuracy = 0.3;
+                targetSpread = 0.15;
+                velocityError = 0.25;
+                missChance = 0.15;
+            } else {
+                targetAccuracy = 0.15;
+                targetSpread = 0.02;
+                velocityError = 0.03;
+                missChance = 0;
+            }
 
-if (state.aiWillMissThisShot === undefined && state.mustBounceBeforeHit && !state.hasBouncedOnCurrentSide) {
-        // Ball just entered AI's side, decide now
-        state.aiWillMissThisShot = Math.random() < missChance;
-        if (state.aiWillMissThisShot) console.log('🤖 AI decided to whiff this one');
-    }
-    if(!state.lastShotType && state.aiWillMissThisShot){
-        console.log("🤖 D'oh, needs to make serves")
-        state.aiWillMissThisShot = false;
-    }
-    if (state.aiWillMissThisShot) {
-        return;
-    }
+            if (state.aiWillMissThisShot === undefined && state.mustBounceBeforeHit && !state.hasBouncedOnCurrentSide) {
+                state.aiWillMissThisShot = Math.random() < missChance;
+                if (state.aiWillMissThisShot) console.log('🤖 AI decided to whiff this one');
+            }
+            if(!state.lastShotType && state.aiWillMissThisShot){
+                console.log("🤖 D'oh, needs to make serves")
+                state.aiWillMissThisShot = false;
+            }
+            if (state.aiWillMissThisShot) {
+                return;
+            }
+            
             p2.rotation = 0; 
 
             const hitboxWidth = PADDLE_WIDTH * 3;
@@ -540,20 +651,13 @@ if (state.aiWillMissThisShot === undefined && state.mustBounceBeforeHit && !stat
                     return;
                 }
 
-                // Pick target landing zone in opponent's court
- 
-
-
-// Pick target with accuracy-based spread
-const baseTargetX = screenW * 0.25 + Math.random() * screenW * targetAccuracy;
-const targetX = baseTargetX + (Math.random() - 0.5) * screenW * targetSpread;
-const targetY = courtY - 5;
+                const baseTargetX = screenW * 0.25 + Math.random() * screenW * targetAccuracy;
+                const targetX = baseTargetX + (Math.random() - 0.5) * screenW * targetSpread;
+                const targetY = courtY - 5;
                 
-                // Calculate trajectory needed
                 const dx = targetX - ball.x;
                 const dy = targetY - ball.y;
                 
-                // Decide shot type
                 let shotType, spinValue;
                 let returnTopspin = (state.lastShotType === 'topspin' && Math.random() < 0.8);
                 
@@ -572,18 +676,14 @@ const targetY = courtY - 5;
                 
                 state.ballSpin = spinValue;
                 
-                // Calculate required trajectory with physics
                 const gravityMult = spinValue > 0 ? TOPSPIN_GRAVITY_MULT : spinValue < 0 ? SLICE_GRAVITY_MULT : 1;
                 const effectiveGravity = GRAVITY * gravityMult;
                 
-                // Use physics to calculate time to reach target
                 const flightTime = Math.abs(dx) / 15;
                 
-                // Calculate required velocities
                 let vx = dx / flightTime;
                 let vy = (dy - 0.5 * effectiveGravity * flightTime * flightTime) / flightTime;
                 
-                // Make sure we clear the net
                 const netX = screenW / 2;
                 const netY = courtY - NET_HEIGHT;
                 const timeToNet = (netX - ball.x) / vx;
@@ -597,18 +697,15 @@ const targetY = courtY - 5;
                     }
                 }
                 
-                // Clamp velocities to reasonable values
                 vx *= (1 + (Math.random() - 0.5) * velocityError);
-vy *= (1 + (Math.random() - 0.5) * velocityError);
+                vy *= (1 + (Math.random() - 0.5) * velocityError);
 
-// Clamp velocities to reasonable values
-vx = Math.max(-25, Math.min(-8, vx));
-vy = Math.max(-20, Math.min(-5, vy));
+                vx = Math.max(-25, Math.min(-8, vx));
+                vy = Math.max(-20, Math.min(-5, vy));
                 
                 ball.vx = vx;
                 ball.vy = vy;
                 
-                // Update paddle rotation for visual
                 const angle = Math.atan2(-vy, -vx);
                 p2.rotation = Math.max(-0.4, Math.min(0.9, angle));
                 
@@ -639,7 +736,7 @@ vy = Math.max(-20, Math.min(-5, vy));
         }
 
         function gameLoop(ticker) {
-            if (state.gameOver) return;
+            if (state.gameOver || !gameStarted) return;
             
             let delta = ticker.deltaTime || 1;
             
@@ -660,8 +757,13 @@ vy = Math.max(-20, Math.min(-5, vy));
                 
                 const gravityMult = state.ballSpin > 0 ? TOPSPIN_GRAVITY_MULT : state.ballSpin < 0 ? SLICE_GRAVITY_MULT : 1;
                 ball.vy += GRAVITY * gravityMult * ballDelta; 
+                
+                ball.prevX = ball.x;
+                ball.prevY = ball.y;
+                
                 ball.x += ball.vx * ballDelta; 
                 ball.y += ball.vy * ballDelta;
+                
                 const screenW = app.screen.width, screenH = app.screen.height;
                 const courtY = screenH * COURT_Y_FACTOR; 
                 
@@ -710,35 +812,29 @@ vy = Math.max(-20, Math.min(-5, vy));
                     }
                 }
                 
-                // Net collision - check line segment intersection
-const netX = screenW / 2;
-const netTopY = courtY - NET_HEIGHT;
-const netBottomY = courtY;
+                const netX = screenW / 2;
+                const netTopY = courtY - NET_HEIGHT;
+                const netBottomY = courtY;
 
-// Check if ball crossed the net plane between frames
-const crossedNet = (ball.prevX < netX && ball.x >= netX) || (ball.prevX > netX && ball.x <= netX);
+                const crossedNet = (ball.prevX < netX && ball.x >= netX) || (ball.prevX > netX && ball.x <= netX);
 
-if (crossedNet) {
-    // Calculate where the ball was when it crossed the net's X position
-    const t = (netX - ball.prevX) / (ball.x - ball.prevX);
-    const crossY = ball.prevY + t * (ball.y - ball.prevY);
-    
-    // Check if it hit the net (not above it)
-    if (crossY > netTopY - BALL_RADIUS) {
-        // Ball hit the net!
-        ball.x = ball.prevX < netX ? netX - BALL_RADIUS : netX + BALL_RADIUS;
-        ball.y = crossY;
-        ball.vx *= -0.5;
-        ball.vy *= 0.6;
-        
-        // If very close to top, bounce it up
-        if (crossY < netTopY + 10) {
-            ball.vy = -Math.abs(ball.vy) * 0.4 - Math.random() * 3;
-        }
-        
-        console.log('🎾 NET HIT at y:', crossY.toFixed(1));
-    }
-}
+                if (crossedNet) {
+                    const t = (netX - ball.prevX) / (ball.x - ball.prevX);
+                    const crossY = ball.prevY + t * (ball.y - ball.prevY);
+                    
+                    if (crossY > netTopY - BALL_RADIUS) {
+                        ball.x = ball.prevX < netX ? netX - BALL_RADIUS : netX + BALL_RADIUS;
+                        ball.y = crossY;
+                        ball.vx *= -0.5;
+                        ball.vy *= 0.6;
+                        
+                        if (crossY < netTopY + 10) {
+                            ball.vy = -Math.abs(ball.vy) * 0.4 - Math.random() * 3;
+                        }
+                        
+                        console.log('🎾 NET HIT at y:', crossY.toFixed(1));
+                    }
+                }
             }
         }
 
@@ -750,76 +846,54 @@ if (crossedNet) {
             resetRound();
         }
 
-       function updateScore(winner, loser) {
-    const p1Score = state.scores.player1, p2Score = state.scores.player2;
-    const winnerPoints = state.scores[winner].points, loserPoints = state.scores[loser].points;
-    
-    // Switch serve every 2 points (table tennis rules)
-    const totalPoints = p1Score.points + p2Score.points;
-    if (totalPoints > 0 && totalPoints % 2 === 0) {
-        state.servingPlayer = state.servingPlayer === 'player1' ? 'player2' : 'player1';
-    }
-    
-    // In deuce (10-10+), switch every point
-    if (p1Score.points >= 10 && p2Score.points >= 10) {
-        state.servingPlayer = state.servingPlayer === 'player1' ? 'player2' : 'player1';
-    }
-    
-    if (winnerPoints >= 11 && winnerPoints - loserPoints >= 2) {
-        p1Score.points = 0; 
-        p2Score.points = 0; 
-        state.scores[winner].games++;
-        state.servingPlayer = 'player1'; // Reset to player1 after each game
-        
-        if (state.scores[winner].games >= 6 && state.scores[winner].games - state.scores[loser].games >= 2) {
-            p1Score.games = 0; 
-            p2Score.games = 0; 
-            state.scores[winner].sets++;
+        function updateScore(winner, loser) {
+            const p1Score = state.scores.player1, p2Score = state.scores.player2;
+            const winnerPoints = state.scores[winner].points, loserPoints = state.scores[loser].points;
             
-            if (state.scores[winner].sets >= 2) { 
-                state.gameOver = true; 
-                showMessage(`${winner === 'player1' ? 'YOU' : 'AI'} WIN!`, true); 
+            const totalPoints = p1Score.points + p2Score.points;
+            if (totalPoints > 0 && totalPoints % 2 === 0) {
+                state.servingPlayer = state.servingPlayer === 'player1' ? 'player2' : 'player1';
             }
+            
+            if (p1Score.points >= 10 && p2Score.points >= 10) {
+                state.servingPlayer = state.servingPlayer === 'player1' ? 'player2' : 'player1';
+            }
+            
+            if (winnerPoints >= 11 && winnerPoints - loserPoints >= 2) {
+                state.gameOver = true;
+                showGameOver(winner);
+                return;
+            }
+            
+            updateScoreUI();
         }
-    }
-    updateScoreUI();
-}
 
-function updateScoreUI() {
-    const p1s = state.scores.player1, p2s = state.scores.player2; 
-    let scoreHTML;
+        function updateScoreUI() {
+            const p1s = state.scores.player1, p2s = state.scores.player2; 
+            let scoreHTML;
 
-    // Handle Deuce and Advantage scores
-    if (p1s.points >= 10 && p2s.points >= 10) {
-        const serveBall1 = state.servingPlayer === 'player1' ? ' 🎾' : '';
-        const serveBall2 = state.servingPlayer === 'player2' ? ' 🎾' : '';
-        
-        if (p1s.points === p2s.points) { 
-            scoreHTML = `<span style="color: ${PLAYER_COLOR_HEX};">${p1s.points}${serveBall1}</span> - <span style="color: ${AI_COLOR_HEX};">${p2s.points}${serveBall2}</span>`;
-        } else if (p1s.points > p2s.points) { 
-            scoreHTML = `<span style="color: ${PLAYER_COLOR_HEX};">Advantage Player${serveBall1}</span>`;
-        } else { 
-            scoreHTML = `<span style="color: ${AI_COLOR_HEX};">Advantage AI${serveBall2}</span>`;
+            if (p1s.points >= 10 && p2s.points >= 10) {
+                const serveBall1 = state.servingPlayer === 'player1' ? ' 🎾' : '';
+                const serveBall2 = state.servingPlayer === 'player2' ? ' 🎾' : '';
+                
+                if (p1s.points === p2s.points) { 
+                    scoreHTML = `<span style="color: ${PLAYER_COLOR_HEX};">${p1s.points}${serveBall1}</span> - <span style="color: ${AI_COLOR_HEX};">${p2s.points}${serveBall2}</span>`;
+                } else if (p1s.points > p2s.points) { 
+                    scoreHTML = `<span style="color: ${PLAYER_COLOR_HEX};">Advantage Player${serveBall1}</span>`;
+                } else { 
+                    scoreHTML = `<span style="color: ${AI_COLOR_HEX};">Advantage AI${serveBall2}</span>`;
+                }
+            } else { 
+                const serveBall1 = state.servingPlayer === 'player1' ? ' 🎾' : '';
+                const serveBall2 = state.servingPlayer === 'player2' ? ' 🎾' : '';
+                
+                const p1Display = `<span style="color: ${PLAYER_COLOR_HEX};">${p1s.points}${serveBall1}</span>`;
+                const p2Display = `<span style="color: ${AI_COLOR_HEX};">${p2s.points}${serveBall2}</span>`;
+                scoreHTML = `${p1Display} - ${p2Display}`;
+            }
+
+            scoreElement.innerHTML = scoreHTML; 
         }
-    } else { 
-        const serveBall1 = state.servingPlayer === 'player1' ? ' 🎾' : '';
-        const serveBall2 = state.servingPlayer === 'player2' ? ' 🎾' : '';
-        
-        const p1Display = `<span style="color: ${PLAYER_COLOR_HEX};">${p1s.points}${serveBall1}</span>`;
-        const p2Display = `<span style="color: ${AI_COLOR_HEX};">${p2s.points}${serveBall2}</span>`;
-        scoreHTML = `${p1Display} - ${p2Display}`;
-    }
-    
-    const p1Games = `<span style="color: ${PLAYER_COLOR_HEX};">${p1s.games}</span>`;
-    const p2Games = `<span style="color: ${AI_COLOR_HEX};">${p2s.games}</span>`;
-    const p1Sets = `<span style="color: ${PLAYER_COLOR_HEX};">${p1s.sets}</span>`;
-    const p2Sets = `<span style="color: ${AI_COLOR_HEX};">${p2s.sets}</span>`;
-    
-    const setsHTML = `Games: ${p1Games}-${p2Games} | Sets: ${p1Sets}-${p2Sets}`;
-
-    scoreElement.innerHTML = scoreHTML; 
-    setsElement.innerHTML = setsHTML;
-}
 
         function resetRound() {
             state.ballInPlay = false; 
@@ -861,6 +935,66 @@ function updateScoreUI() {
         function getBallSide() { 
             return ball.x < app.screen.width / 2 ? 'player1' : 'player2'; 
         }
+        
+        function showGameOver(winner) {
+            const p1s = state.scores.player1.points;
+            const p2s = state.scores.player2.points;
+            
+            const gameOverTitle = document.querySelector('.game-over-title');
+            const finalScore = document.querySelector('.final-score');
+            const rematchOptions = document.querySelector('.rematch-options');
+            
+            gameOverTitle.textContent = winner === 'player1' ? 'PLAYER WINS!' : 'AI WINS!';
+            gameOverTitle.style.color = winner === 'player1' ? PLAYER_COLOR_HEX : AI_COLOR_HEX;
+            finalScore.innerHTML = `Final Score: <span style="color: ${PLAYER_COLOR_HEX};">${p1s}</span> - <span style="color: ${AI_COLOR_HEX};">${p2s}</span>`;
+            
+            rematchOptions.innerHTML = '';
+            
+            const difficulties = ['beginner', 'medium', 'god'];
+            const currentIndex = difficulties.indexOf(AI_DIFFICULTY);
+            
+            if (winner === 'player1') {
+                const sameBtn = document.createElement('button');
+                sameBtn.className = 'rematch-btn';
+                sameBtn.textContent = `REMATCH (${AI_DIFFICULTY.toUpperCase()})`;
+                sameBtn.onclick = () => startRematch(AI_DIFFICULTY);
+                rematchOptions.appendChild(sameBtn);
+                
+                if (currentIndex < difficulties.length - 1) {
+                    const harderBtn = document.createElement('button');
+                    harderBtn.className = 'rematch-btn';
+                    const nextDiff = difficulties[currentIndex + 1];
+                    harderBtn.textContent = `HARDER (${nextDiff.toUpperCase()})`;
+                    harderBtn.onclick = () => startRematch(nextDiff);
+                    rematchOptions.appendChild(harderBtn);
+                }
+            } else {
+                const sameBtn = document.createElement('button');
+                sameBtn.className = 'rematch-btn';
+                sameBtn.textContent = `REMATCH (${AI_DIFFICULTY.toUpperCase()})`;
+                sameBtn.onclick = () => startRematch(AI_DIFFICULTY);
+                rematchOptions.appendChild(sameBtn);
+                
+                if (currentIndex > 0) {
+                    const easierBtn = document.createElement('button');
+                    easierBtn.className = 'rematch-btn';
+                    const prevDiff = difficulties[currentIndex - 1];
+                    easierBtn.textContent = `EASIER (${prevDiff.toUpperCase()})`;
+                    easierBtn.onclick = () => startRematch(prevDiff);
+                    rematchOptions.appendChild(easierBtn);
+                }
+            }
+            
+            gameOverScreen.style.display = 'flex';
+        }
+        
+        function startRematch(difficulty) {
+            AI_DIFFICULTY = difficulty;
+            gameOverScreen.style.display = 'none';
+            initializeGameState();
+            updateScoreUI();
+            setTimeout(startServe, 1000);
+        }
 
         app = new PIXI.Application();
         await app.init({ background: 0x000000, resizeTo: window, antialias: true });
@@ -874,7 +1008,22 @@ function updateScoreUI() {
         resizeAndPosition();
         
         updateScoreUI();
-        setTimeout(startServe, 1000);
+        
+        const difficultyBtns = document.querySelectorAll('.difficulty-btn[data-difficulty]');
+        difficultyBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                difficultyBtns.forEach(b => b.classList.remove('selected'));
+                btn.classList.add('selected');
+                AI_DIFFICULTY = btn.dataset.difficulty;
+            });
+        });
+        
+        document.getElementById('start-game-btn').addEventListener('click', () => {
+            introScreen.style.display = 'none';
+            gameStarted = true;
+            setTimeout(startServe, 1000);
+        });
+        
         app.ticker.add(gameLoop);
     });
     </script>
