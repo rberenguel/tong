@@ -66,7 +66,7 @@
                 scores: { player1: { points: 0, games: 0, sets: 0 }, player2: { points: 0, games: 0, sets: 0 } },
                 gameOver: false,
                 ballSpin: 0,
-                lastShotType: 'flat',
+                lastShotType: undefined,
                 mustBounceBeforeHit: false,
                 hasBouncedOnCurrentSide: false
             };
@@ -426,6 +426,7 @@
             state.bounces = 0; 
             state.lastPaddleHitSide = null; // Correctly reset
             state.lastBounceSide = null;    // Correctly reset
+            state.lastShotType = undefined;
             state.ballSpin = 0;
             state.mustBounceBeforeHit = false;
             state.hasBouncedOnCurrentSide = false;
@@ -496,11 +497,10 @@ function aiLogic(delta) {
             const p2 = player2, screenW = app.screen.width;
             
             if (!state.ballInPlay || getBallSide() === 'player1' || ball.vx <= 0) { 
-                p2.rotation *= 0.85; // Let paddle return to neutral
+                p2.rotation *= 0.85; 
                 return; 
             }
             
-            // Keep the paddle visually upright during tracking. The actual shot angle is calculated on impact.
             p2.rotation = 0; 
 
             const hitboxWidth = PADDLE_WIDTH * 3;
@@ -511,7 +511,6 @@ function aiLogic(delta) {
             
             let shouldHit = canHit;
             if (state.mustBounceBeforeHit && !state.hasBouncedOnCurrentSide) {
-                // Keep the logic to let the ball go out of bounds
                 const courtY = app.screen.height * COURT_Y_FACTOR;
                 const gravityMult = state.ballSpin > 0 ? TOPSPIN_GRAVITY_MULT : state.ballSpin < 0 ? SLICE_GRAVITY_MULT : 1;
                 let t = 0, testX = ball.x, testY = ball.y, testVY = ball.vy;
@@ -526,46 +525,60 @@ function aiLogic(delta) {
             }
             
             if (shouldHit && circleRectCollision(ball.x, ball.y, BALL_RADIUS, p2.x, p2.y, hitboxWidth, hitboxHeight)) {
+                if (state.lastPaddleHitSide === 'player2') {
+                    console.log('🤖 FAULT: Double Touch');
+                    pointOver('player1');
+                    return;
+                }
+
                 const courtY = app.screen.height * COURT_Y_FACTOR;
                 const ballHeight = courtY - ball.y;
                 const distFromNet = p2.x - screenW / 2;
+                
+                let power, angle, shotType;
+                let returnTopspin = false;
 
-                // 1. DYNAMIC POWER: More power from further back.
-                const power = 14 + (distFromNet / (screenW / 2)) * 6;
+                // --- NEW: Smarter Shot Selection Logic ---
+                // If the player hits topspin, the AI is 80% likely to return topspin, creating a rally.
+                if (state.lastShotType === 'topspin' && Math.random() < 0.8) {
+                    returnTopspin = true;
+                }
 
-                // 2. DYNAMIC ANGLE CALCULATION (THE FIX):
-                // Calculate a required upward angle based on ball height to reliably clear the net.
-                // A positive angle generates an upward (negative) velocity.
-                let angle = 0.2; // Base upward angle (radians)
+                // Decide shot based on the new logic or the old height-based logic.
+                if (returnTopspin || (ballHeight > NET_HEIGHT * 1.5 && Math.random() > 0.3)) {
+                    shotType = 'Topspin/Flat';
+                    power = 16 + (distFromNet / (screenW / 2)) * 5 + Math.random() * 3;
+                    angle = 0.05 + Math.random() * 0.15; // Aggressive but still upward angle
+                    state.ballSpin = 1;
+                } else {
+                    shotType = 'Slice';
+                    power = 14 + (distFromNet / (screenW / 2)) * 4;
+                    angle = 0.25; // Defensive upward angle
+                    if (ballHeight < NET_HEIGHT * 2) {
+                         angle += (1 - (ballHeight / (NET_HEIGHT * 2))) * 0.6;
+                    }
+                    angle += (Math.random() - 0.5) * 0.1;
+                    state.ballSpin = -1;
+                }
 
-                // Add more upward angle for low balls.
-                if (ballHeight < NET_HEIGHT * 2.5) {
-                    // This maps ball height in the range [0, 125] to an additional angle [0.7, 0]
-                    angle += (1 - (ballHeight / (NET_HEIGHT * 2.5))) * 0.7;
+                if(!state.lastShotType){
+                    // Slice when serving
+                    shotType = 'Slice'
                 }
                 
-                // Add a small random factor to prevent shots from being too predictable
-                angle += (Math.random() - 0.5) * 0.1;
-
-                // Cap the angle to a reasonable maximum
-                angle = Math.min(angle, 0.9); // Max ~50 degrees
-
-                // Visually snap the paddle to the calculated angle for feedback
+                angle = Math.max(-0.4, Math.min(angle, 0.9));
                 p2.rotation = angle;
                 
-                // 3. CALCULATE VELOCITY using the new, reliable angle
                 ball.vx = -Math.cos(angle) * power;
-                ball.vy = -Math.sin(angle) * power; // Positive angle -> negative vy (UP)
+                ball.vy = -Math.sin(angle) * power;
                 
-                // Reset rally state
-                state.ballSpin = Math.random() > 0.6 ? (Math.random() > 0.5 ? 1 : -1) : 0;
                 state.bounces = 0; 
                 state.lastPaddleHitSide = getBallSide();
                 state.lastBounceSide = null;
                 state.mustBounceBeforeHit = true;
                 state.hasBouncedOnCurrentSide = false;
                 
-                console.log('🤖 AI hit (FIXED LOGIC) | height:', ballHeight.toFixed(0), '| power:', power.toFixed(1), '| angle:', (angle * 180 / Math.PI).toFixed(0), '° | vy:', ball.vy.toFixed(1));
+                console.log(`🤖 AI ${shotType} | height:`, ballHeight.toFixed(0), '| power:', power.toFixed(1), '| angle:', (angle * 180 / Math.PI).toFixed(0), '°');
             }
         }
 
