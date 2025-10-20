@@ -1,6 +1,11 @@
 <!DOCTYPE html>
 <html>
 <head>
+     <meta charset="utf-8" />
+     <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, user-scalable=no"
+    />
     <title>Synthwave Tennis</title>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Sixtyfour&display=swap');
@@ -38,6 +43,9 @@
         const MAX_PADDLE_ANGLE = Math.PI / 6;
         const PADDLE_SPEED = 0.35;
         const AI_PADDLE_SPEED_X = 0.08;
+
+        const PLAYER_COLOR_HEX = '#00FFFF'; // Player 1 color
+        const AI_COLOR_HEX = '#FFA500';
         
         const scoreElement = document.getElementById('score');
         const setsElement = document.getElementById('sets');
@@ -341,7 +349,7 @@
             const timingBonus = 1 - Math.abs(0.5 - timingFactor) * 2;
             const isPerfectTiming = timingBonus > 0.8;
             
-            const power = basePower * (1 + timingBonus * 0.5);
+            let power = basePower * (1 + timingBonus * 0.5);
             const angleDeg = player1.rotation * 180 / Math.PI;
             
             let shotType = 'flat';
@@ -354,13 +362,23 @@
                 spinValue = 1;
             }
             
+            // CORRECTED: Apply a power penalty for slice shots
+            if (shotType === 'slice') {
+                power *= 0.75; 
+            }
+            
             state.ballSpin = spinValue;
             state.lastShotType = shotType;
             
             const angle = player1.rotation;
             
             ball.vx = Math.cos(angle) * power;
-            ball.vy = -Math.sin(angle) * power * 0.55;
+            
+            if (shotType === 'slice') {
+                ball.vy = -Math.sin(Math.abs(angle)) * power * 0.30;
+            } else {
+                ball.vy = -Math.sin(angle) * power * 0.55;
+            }
             
             if (isPerfectTiming && state.shotPower > 20) {
                 createFireEffect(ball.x, ball.y);
@@ -678,27 +696,35 @@
         function updateScoreUI() {
             const p1s = state.scores.player1, p2s = state.scores.player2; 
             const tennisPoints = ["0", "15", "30", "40"];
-            let p1Display, p2Display;
-            
+            let scoreHTML;
+
+            // Handle Deuce and Advantage scores, which take over the point display
             if (p1s.points >= 3 && p2s.points >= 3) {
                 if (p1s.points === p2s.points) { 
-                    p1Display = "Deuce"; p2Display = ""; 
+                    scoreHTML = "Deuce"; // Neutral color for Deuce
                 } else if (p1s.points > p2s.points) { 
-                    p1Display = "Ad"; p2Display = ""; 
+                    scoreHTML = `<span style="color: ${PLAYER_COLOR_HEX};">Advantage Player</span>`;
                 } else { 
-                    p1Display = ""; p2Display = "Ad"; 
+                    scoreHTML = `<span style="color: ${AI_COLOR_HEX};">Advantage AI</span>`;
                 }
             } else { 
-                p1Display = tennisPoints[p1s.points]; 
-                p2Display = tennisPoints[p2s.points]; 
+                // Handle regular point scores
+                const p1Display = `<span style="color: ${PLAYER_COLOR_HEX};">${tennisPoints[p1s.points]}</span>`;
+                const p2Display = `<span style="color: ${AI_COLOR_HEX};">${tennisPoints[p2s.points]}</span>`;
+                scoreHTML = `${p1Display} - ${p2Display}`;
             }
             
-            const scoreText = (p1Display === "Deuce" || p1Display === "Ad" || p2Display === "Ad") 
-                ? `${p1Display}${p2Display}` 
-                : `${p1s.games}-${p1Display} | ${p2Display}-${p2s.games}`;
+            // Build the separate, clear display for Games and Sets
+            const p1Games = `<span style="color: ${PLAYER_COLOR_HEX};">${p1s.games}</span>`;
+            const p2Games = `<span style="color: ${AI_COLOR_HEX};">${p2s.games}</span>`;
+            const p1Sets = `<span style="color: ${PLAYER_COLOR_HEX};">${p1s.sets}</span>`;
+            const p2Sets = `<span style="color: ${AI_COLOR_HEX};">${p2s.sets}</span>`;
             
-            scoreElement.innerText = scoreText; 
-            setsElement.innerText = `Sets: ${p1s.sets} - ${p2s.sets}`;
+            const setsHTML = `Games: ${p1Games}-${p2Games} | Sets: ${p1Sets}-${p2Sets}`;
+
+            // Update the UI elements
+            scoreElement.innerHTML = scoreHTML; 
+            setsElement.innerHTML = setsHTML;
         }
 
         function resetRound() {
