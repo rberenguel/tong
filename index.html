@@ -6,7 +6,7 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, user-scalable=no"
     />
-    <title>Synthwave Tennis</title>
+    <title>Tong</title>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Sixtyfour&display=swap');
         body, html { margin: 0; padding: 0; overflow: hidden; background-color: #000; font-family: 'Sixtyfour', sans-serif; color: #fff; }
@@ -492,32 +492,17 @@
             }
         }
 
-       function aiLogic(delta) {
+function aiLogic(delta) {
             const p2 = player2, screenW = app.screen.width;
             
             if (!state.ballInPlay || getBallSide() === 'player1' || ball.vx <= 0) { 
-                p2.rotation *= 0.85; 
+                p2.rotation *= 0.85; // Let paddle return to neutral
                 return; 
             }
             
-            const timeToReach = (p2.x - ball.x) / ball.vx;
-            
-            if (timeToReach > 0 && timeToReach < 100) {
-                const gravityMult = state.ballSpin > 0 ? TOPSPIN_GRAVITY_MULT : state.ballSpin < 0 ? SLICE_GRAVITY_MULT : 1;
-                const predictedY = ball.y + ball.vy * timeToReach + 0.5 * GRAVITY * gravityMult * Math.pow(timeToReach, 2);
-                const offset = predictedY - p2.y;
-                
-                const courtY = app.screen.height * COURT_Y_FACTOR;
-                const ballHeight = courtY - ball.y;
-                
-                // AI aims UP more aggressively to clear net
-                const netClearanceBonus = ballHeight < 120 ? -0.5 : -0.2;
-                
-                const targetAngle = (Math.max(-1, Math.min(1, -offset / 100)) + netClearanceBonus) * MAX_PADDLE_ANGLE;
-                
-                p2.rotation += (targetAngle - p2.rotation) * 0.15 * delta;
-            }
-            
+            // Keep the paddle visually upright during tracking. The actual shot angle is calculated on impact.
+            p2.rotation = 0; 
+
             const hitboxWidth = PADDLE_WIDTH * 3;
             const hitboxHeight = PADDLE_HEIGHT * 1.5;
             
@@ -526,51 +511,61 @@
             
             let shouldHit = canHit;
             if (state.mustBounceBeforeHit && !state.hasBouncedOnCurrentSide) {
+                // Keep the logic to let the ball go out of bounds
                 const courtY = app.screen.height * COURT_Y_FACTOR;
                 const gravityMult = state.ballSpin > 0 ? TOPSPIN_GRAVITY_MULT : state.ballSpin < 0 ? SLICE_GRAVITY_MULT : 1;
-                
-                let t = 0;
-                let testX = ball.x;
-                let testY = ball.y;
-                let testVY = ball.vy;
-                
+                let t = 0, testX = ball.x, testY = ball.y, testVY = ball.vy;
                 while (testY < courtY && testX < screenW && t < 200) {
                     testVY += GRAVITY * gravityMult;
                     testX += ball.vx;
                     testY += testVY;
                     t++;
                 }
-                
-                const willLandInBounds = testX < screenW && testY >= courtY;
-                shouldHit = willLandInBounds;
-                
-                if (!willLandInBounds) {
-                    console.log('🤖 AI letting ball go out');
-                }
+                shouldHit = testX < screenW && testY >= courtY;
+                if (!shouldHit) console.log('🤖 AI letting ball go out');
             }
             
             if (shouldHit && circleRectCollision(ball.x, ball.y, BALL_RADIUS, p2.x, p2.y, hitboxWidth, hitboxHeight)) {
                 const courtY = app.screen.height * COURT_Y_FACTOR;
                 const ballHeight = courtY - ball.y;
+                const distFromNet = p2.x - screenW / 2;
+
+                // 1. DYNAMIC POWER: More power from further back.
+                const power = 14 + (distFromNet / (screenW / 2)) * 6;
+
+                // 2. DYNAMIC ANGLE CALCULATION (THE FIX):
+                // Calculate a required upward angle based on ball height to reliably clear the net.
+                // A positive angle generates an upward (negative) velocity.
+                let angle = 0.2; // Base upward angle (radians)
+
+                // Add more upward angle for low balls.
+                if (ballHeight < NET_HEIGHT * 2.5) {
+                    // This maps ball height in the range [0, 125] to an additional angle [0.7, 0]
+                    angle += (1 - (ballHeight / (NET_HEIGHT * 2.5))) * 0.7;
+                }
                 
-                const basePower = ballHeight < 100 ? 16 : 13;
-                const power = basePower + Math.random() * 3;
-                const angle = p2.rotation;
+                // Add a small random factor to prevent shots from being too predictable
+                angle += (Math.random() - 0.5) * 0.1;
+
+                // Cap the angle to a reasonable maximum
+                angle = Math.min(angle, 0.9); // Max ~50 degrees
+
+                // Visually snap the paddle to the calculated angle for feedback
+                p2.rotation = angle;
                 
-                let verticalBoost = ballHeight < 100 ? 1.2 : 0.75;
-                
+                // 3. CALCULATE VELOCITY using the new, reliable angle
                 ball.vx = -Math.cos(angle) * power;
-                ball.vy = -Math.sin(angle) * power * verticalBoost;
+                ball.vy = -Math.sin(angle) * power; // Positive angle -> negative vy (UP)
                 
+                // Reset rally state
                 state.ballSpin = Math.random() > 0.6 ? (Math.random() > 0.5 ? 1 : -1) : 0;
-                
                 state.bounces = 0; 
-                state.lastPaddleHitSide = getBallSide(); // Use the correct variable
-                state.lastBounceSide = null;             // Reset bounce tracking
+                state.lastPaddleHitSide = getBallSide();
+                state.lastBounceSide = null;
                 state.mustBounceBeforeHit = true;
                 state.hasBouncedOnCurrentSide = false;
                 
-                console.log('🤖 AI hit | height:', ballHeight.toFixed(0), '| power:', power.toFixed(1), '| angle:', (angle * 180 / Math.PI).toFixed(0), '° | vy:', ball.vy.toFixed(1));
+                console.log('🤖 AI hit (FIXED LOGIC) | height:', ballHeight.toFixed(0), '| power:', power.toFixed(1), '| angle:', (angle * 180 / Math.PI).toFixed(0), '° | vy:', ball.vy.toFixed(1));
             }
         }
 
