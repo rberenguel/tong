@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Synthwave Tennis</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Sixtyfour&display=swap');
+        body, html { margin: 0; padding: 0; overflow: hidden; background-color: #000; font-family: 'Sixtyfour', sans-serif; color: #fff; }
+        canvas { display: block; }
+        #ui-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 10; }
+        #score { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); font-size: 48px; text-shadow: 0 0 10px #fff, 0 0 20px #ff00ff, 0 0 30px #ff00ff; }
+        #sets { position: absolute; top: 80px; left: 50%; transform: translateX(-50%); font-size: 24px; color: #ccc; }
+        #message { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 32px; text-align: center; display: none; text-shadow: 0 0 10px #fff, 0 0 20px #00ffff, 0 0 30px #00ffff; }
+        #controls { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); font-size: 14px; color: #666; text-align: center; }
+        #shot-indicator { position: absolute; top: 120px; left: 20px; font-size: 18px; color: #0ff; text-shadow: 0 0 5px #0ff; }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/8.1.5/pixi.min.js"></script>
+</head>
+<body>
+    <div id="ui-container">
+        <div id="score">0 - 0</div>
+        <div id="sets">Sets: 0 - 0</div>
+        <div id="message"></div>
+        <div id="shot-indicator"></div>
+        <div id="controls">Mouse position = paddle angle | Hold to charge | Release to hit</div>
+    </div>
+    <script>
+    window.addEventListener('load', async () => {
+        // --- Constants ---
+        const PADDLE_WIDTH = 6, PADDLE_HEIGHT = 40, BALL_RADIUS = 5, NET_WIDTH = 4, NET_HEIGHT = 50;
+        const GRAVITY = 0.5;
+        const TOPSPIN_GRAVITY_MULT = 1.8;
+        const SLICE_GRAVITY_MULT = 0.4;
+        const MAX_SHOT_POWER = 30;
+        const SHOT_CHARGE_RATE = 1.2;
+        const SWING_DISTANCE = 70;
+        const SWING_DURATION = 6;
+        const COURT_Y_FACTOR = 0.75;
+        const MAX_PADDLE_ANGLE = Math.PI / 6;
+        const PADDLE_SPEED = 0.35;
+        
+        const scoreElement = document.getElementById('score');
+        const setsElement = document.getElementById('sets');
+        const messageElement = document.getElementById('message');
+        const shotIndicator = document.getElementById('shot-indicator');
+
+        let app, player1, player2, ball, net, floor, trail;
+        let state = {};
+        let trailPoints = [];
+
+        function initializeGameState() {
+            state = {
+                ballInPlay: false, shotCharging: false, shotPower: 0, bounces: 0,
+                lastSideHit: null, servingPlayer: 'player1',
+                scores: { player1: { points: 0, games: 0, sets: 0 }, player2: { points: 0, games: 0, sets: 0 } },
+                gameOver: false,
+                ballSpin: 0,
+                lastShotType: 'flat',
+                mustBounceBeforeHit: false,
+                hasBouncedOnCurrentSide: false
+            };
+        }
+
+        function setupScene() {
+            floor = new PIXI.Graphics(); 
+            net = new PIXI.Graphics();
+            trail = new PIXI.Graphics();
+            
+            player1 = createPaddle(0x00FFFF); 
+            player2 = createPaddle(0xFFA500);
+            
+            ball = new PIXI.Graphics();
+            ball.circle(0, 0, BALL_RADIUS);
+            ball.fill(0xFFFF00);
+            ball.vx = 0;
+            ball.vy = 0;
+            
+            app.stage.addChild(floor, net, trail, player1, player2, ball);
+        }
+
+        function resizeAndPosition() {
+            const screenW = app.screen.width, screenH = app.screen.height;
+            const courtY = screenH * COURT_Y_FACTOR;
+            
+            floor.clear();
+            floor.rect(0, courtY, screenW, 3);
+            floor.fill(0x888888);
+            
+            net.clear();
+            net.rect(screenW / 2 - NET_WIDTH / 2, courtY - NET_HEIGHT, NET_WIDTH, NET_HEIGHT);
+            net.fill(0xFF00FF);
+            
+            player1.baseX = screenW * 0.2; 
+            player2.baseX = screenW * 0.8; 
+            
+            const paddleY = courtY - NET_HEIGHT / 2;
+            player1.targetY = paddleY; 
+            player2.targetY = paddleY;
+        }
+
+        function createPaddle(color) {
+            const p = new PIXI.Graphics();
+            p.rect(-PADDLE_WIDTH / 2, -PADDLE_HEIGHT / 2, PADDLE_WIDTH, PADDLE_HEIGHT);
+            p.fill(color);
+            p.swing = { active: false, progress: 0 };
+            p.targetY = 0;
+            p.paddleColor = color;
+            p.baseX = 0;
+            return p;
+        }
+
+        function addControls() {
+            app.stage.eventMode = 'static'; 
+            app.stage.hitArea = app.screen; 
+            app.canvas.style.touchAction = 'none';
+            
+            const handlePointerDown = e => {
+                if (state.gameOver || !state.ballInPlay) return;
+                startShotCharge();
+            };
+            
+            const handlePointerUp = () => { 
+                if (state.shotCharging) releaseShot(); 
+            };
+            
+            const handlePointerMove = e => { 
+                updatePaddleControl(e.global.x, e.global.y); 
+            };
+            
+            app.stage.on('pointerdown', handlePointerDown);
+            app.stage.on('pointerup', handlePointerUp);
+            app.stage.on('pointerupoutside', handlePointerUp);
+            app.stage.on('pointermove', handlePointerMove);
+            
+            window.addEventListener('keydown', (e) => {
+                if (e.code === 'Space' && !state.shotCharging && state.ballInPlay && !state.gameOver) {
+                    e.preventDefault();
+                    startShotCharge();
+                }
+            });
+            
+            window.addEventListener('keyup', (e) => {
+                if (e.code === 'Space' && state.shotCharging) {
+                    e.preventDefault();
+                    releaseShot();
+                }
+            });
+        }
+
+        function updatePaddleControl(globalX, globalY) {
+            const screenW = app.screen.width;
+            const screenH = app.screen.height;
+            const courtY = screenH * COURT_Y_FACTOR;
+            
+            player1.baseX = Math.max(PADDLE_WIDTH * 2, Math.min(screenW / 2 - 50, globalX));
+            
+            const minY = courtY - PADDLE_HEIGHT * 3;
+            const maxY = courtY - PADDLE_HEIGHT * 0.5;
+            const clampedY = Math.max(minY, Math.min(maxY, globalY));
+            const centerY = (minY + maxY) / 2;
+            
+            const offsetY = clampedY - centerY;
+            const range = (maxY - minY) / 2;
+            const normalizedY = offsetY / range;
+            
+            player1.rotation = normalizedY * MAX_PADDLE_ANGLE;
+            
+            const angleDeg = player1.rotation * 180 / Math.PI;
+            let shotType = 'FLAT';
+            if (angleDeg < -10) shotType = 'SLICE ↓';
+            else if (angleDeg > 10) shotType = 'TOPSPIN ↑';
+            
+            shotIndicator.innerHTML = `${shotType} (${angleDeg.toFixed(0)}°)`;
+            shotIndicator.style.color = angleDeg < -15 ? '#ff00ff' : angleDeg > 15 ? '#ff6600' : '#00ffff';
+        }
+
+        function startShotCharge() { 
+            if (!player1.swing.active) { 
+                state.shotCharging = true; 
+                state.shotPower = 0;
+            }
+        }
+
+        function releaseShot() { 
+            if (state.shotCharging) { 
+                state.shotCharging = false; 
+                player1.swing.active = true; 
+                player1.swing.progress = 0;
+                player1.scale.set(1, 1);
+                redrawPaddle(player1);
+            } 
+        }
+
+        function redrawPaddle(p) {
+            p.clear();
+            p.rect(-PADDLE_WIDTH / 2, -PADDLE_HEIGHT / 2, PADDLE_WIDTH, PADDLE_HEIGHT);
+            p.fill(p.paddleColor);
+        }
+
+        function updatePlayerSwing(delta) {
+            const p1 = player1;
+            
+            if (state.shotCharging) {
+                const chargeRatio = Math.min(1, state.shotPower / MAX_SHOT_POWER);
+                p1.x = p1.baseX - chargeRatio * SWING_DISTANCE;
+                p1.scale.set(1 - chargeRatio * 0.4, 1 + chargeRatio * 0.2);
+                
+                p1.clear();
+                p1.rect(-PADDLE_WIDTH / 2, -PADDLE_HEIGHT / 2, PADDLE_WIDTH, PADDLE_HEIGHT);
+                p1.fill(p1.paddleColor);
+                
+                if (chargeRatio > 0.3) {
+                    const glowSize = 3 + chargeRatio * 8;
+                    p1.rect(-PADDLE_WIDTH / 2 - glowSize, -PADDLE_HEIGHT / 2 - glowSize, PADDLE_WIDTH + glowSize * 2, PADDLE_HEIGHT + glowSize * 2);
+                    p1.stroke({ width: 3, color: 0xFFFFFF, alpha: chargeRatio });
+                }
+                
+                if (chargeRatio > 0.9) {
+                    const pulse = Math.sin(Date.now() / 50) * 0.5 + 0.5;
+                    p1.circle(0, 0, PADDLE_HEIGHT / 2 + 10);
+                    p1.stroke({ width: 2, color: 0xFF0000, alpha: pulse * 0.8 });
+                }
+            }
+            
+            if (!p1.swing.active) return;
+            
+            p1.swing.progress += delta;
+            p1.scale.set(1, 1);
+            redrawPaddle(p1);
+            
+            const swingRatio = Math.min(1, p1.swing.progress / SWING_DURATION);
+            const swingArc = Math.sin(swingRatio * Math.PI);
+            p1.x = p1.baseX + swingArc * SWING_DISTANCE * 1.5;
+            
+            const hitboxWidth = PADDLE_WIDTH * 3;
+            const hitboxHeight = PADDLE_HEIGHT * 1.5;
+            
+            const ballSide = getBallSide();
+            const canHit = ballSide === 'player1' && (!state.mustBounceBeforeHit || state.hasBouncedOnCurrentSide);
+            
+            if (canHit && circleRectCollision(ball.x, ball.y, BALL_RADIUS, p1.x, p1.y, hitboxWidth, hitboxHeight)) { 
+                hitBall(swingRatio); 
+                p1.swing.active = false; 
+                p1.x = p1.baseX; 
+            } else if (!canHit && circleRectCollision(ball.x, ball.y, BALL_RADIUS, p1.x, p1.y, hitboxWidth, hitboxHeight)) {
+                console.log('❌ Illegal hit before bounce!');
+                pointOver('player2');
+                p1.swing.active = false;
+                p1.x = p1.baseX;
+            }
+            
+            if (p1.swing.progress >= SWING_DURATION) { 
+                p1.swing.active = false; 
+                p1.x = p1.baseX; 
+                state.shotPower = 0; 
+            }
+        }
+
+        function hitBall(timingFactor) {
+            const basePower = 10 + state.shotPower * 0.8;
+            const timingBonus = 1 - Math.abs(0.5 - timingFactor) * 2;
+            const isPerfectTiming = timingBonus > 0.8;
+            
+            const power = basePower * (1 + timingBonus * 0.5);
+            const angleDeg = player1.rotation * 180 / Math.PI;
+            
+            let shotType = 'flat';
+            let spinValue = 0;
+            if (angleDeg < -10) {
+                shotType = 'slice';
+                spinValue = -1;
+            } else if (angleDeg > 10) {
+                shotType = 'topspin';
+                spinValue = 1;
+            }
+            
+            state.ballSpin = spinValue;
+            state.lastShotType = shotType;
+            
+            const angle = player1.rotation;
+            
+            ball.vx = Math.cos(angle) * power;
+            ball.vy = -Math.sin(angle) * power * 0.55;
+            
+            if (isPerfectTiming && state.shotPower > 20) {
+                createFireEffect(ball.x, ball.y);
+                ball.vx *= 1.3;
+                showMessage('POWER SHOT! 🔥', false);
+            }
+            
+            state.bounces = 0; 
+            state.lastSideHit = getBallSide();
+            state.mustBounceBeforeHit = true;
+            state.hasBouncedOnCurrentSide = false;
+            state.shotPower = 0;
+            
+            console.log('🎾', shotType.toUpperCase(), '| Power:', power.toFixed(1), '| Timing:', (timingBonus * 100).toFixed(0) + '%', '| Angle:', angleDeg.toFixed(0) + '°', '| vy:', ball.vy.toFixed(1));
+        }
+        
+        function createFireEffect(x, y) {
+            for (let i = 0; i < 8; i++) {
+                const particle = new PIXI.Graphics();
+                particle.circle(0, 0, Math.random() * 3 + 2);
+                particle.fill(Math.random() > 0.5 ? 0xFF6600 : 0xFF0000);
+                particle.x = x;
+                particle.y = y;
+                particle.alpha = 1;
+                particle.vx = (Math.random() - 0.5) * 4;
+                particle.vy = (Math.random() - 0.5) * 4;
+                app.stage.addChild(particle);
+                
+                let life = 20;
+                const animate = () => {
+                    particle.x += particle.vx;
+                    particle.y += particle.vy;
+                    particle.alpha = life / 20;
+                    life--;
+                    if (life > 0) requestAnimationFrame(animate);
+                    else app.stage.removeChild(particle);
+                };
+                animate();
+            }
+        }
+        
+        function startServe() {
+            hideMessage();
+            state.bounces = 0; 
+            state.lastSideHit = null;
+            state.ballSpin = 0;
+            state.mustBounceBeforeHit = false;
+            state.hasBouncedOnCurrentSide = false;
+            trailPoints = [];
+            
+            const screenW = app.screen.width;
+            const screenH = app.screen.height;
+            const courtY = screenH * COURT_Y_FACTOR;
+            
+            const toLeft = Math.random() > 0.5;
+            ball.x = screenW / 2;
+            ball.y = courtY - 180;
+            ball.vx = toLeft ? -6 : 6;
+            ball.vy = 1;
+            
+            state.ballInPlay = true;
+        }
+
+        function updatePaddlePositions(delta) {
+            const courtY = app.screen.height * COURT_Y_FACTOR;
+            const minY = PADDLE_HEIGHT / 2 + 10;
+            const maxY = courtY - PADDLE_HEIGHT / 2 - 10;
+            const screenW = app.screen.width;
+            
+            if (state.ballInPlay && ball.x < screenW / 2 && ball.y > minY && ball.y < maxY) {
+                player1.targetY = ball.y;
+            } else {
+                player1.targetY = courtY - NET_HEIGHT / 2;
+            }
+            
+            // AI tracks ball on its side
+            if (state.ballInPlay && ball.x >= screenW / 2) {
+                // Move to intercept ball horizontally
+                const minX = screenW / 2 + 50;
+                const maxX = screenW - PADDLE_WIDTH * 2;
+                player2.baseX = Math.max(minX, Math.min(maxX, ball.x));
+                
+                // Move to intercept ball vertically
+                if (ball.y > minY && ball.y < maxY) {
+                    player2.targetY = ball.y;
+                } else {
+                    player2.targetY = courtY - NET_HEIGHT / 2;
+                }
+            } else {
+                // Return to default position
+                player2.baseX = screenW * 0.8;
+                player2.targetY = courtY - NET_HEIGHT / 2;
+            }
+            
+            player1.y += (player1.targetY - player1.y) * PADDLE_SPEED;
+            player2.y += (player2.targetY - player2.y) * PADDLE_SPEED;
+            
+            if (!player1.swing.active && !state.shotCharging) {
+                player1.x = player1.baseX;
+            }
+            if (!player2.swing.active) {
+                player2.x = player2.baseX;
+            }
+        }
+
+        function aiLogic(delta) {
+            const p2 = player2, screenW = app.screen.width;
+            
+            if (!state.ballInPlay || getBallSide() === 'player1' || ball.vx <= 0) { 
+                p2.rotation *= 0.85; 
+                return; 
+            }
+            
+            const timeToReach = (p2.x - ball.x) / ball.vx;
+            
+            if (timeToReach > 0 && timeToReach < 100) {
+                const gravityMult = state.ballSpin > 0 ? TOPSPIN_GRAVITY_MULT : state.ballSpin < 0 ? SLICE_GRAVITY_MULT : 1;
+                const predictedY = ball.y + ball.vy * timeToReach + 0.5 * GRAVITY * gravityMult * Math.pow(timeToReach, 2);
+                const offset = predictedY - p2.y;
+                
+                const courtY = app.screen.height * COURT_Y_FACTOR;
+                const ballHeight = courtY - ball.y;
+                
+                // AI aims UP more aggressively to clear net
+                const netClearanceBonus = ballHeight < 120 ? -0.5 : -0.2;
+                
+                const targetAngle = (Math.max(-1, Math.min(1, -offset / 100)) + netClearanceBonus) * MAX_PADDLE_ANGLE;
+                
+                p2.rotation += (targetAngle - p2.rotation) * 0.15 * delta;
+            }
+            
+            const hitboxWidth = PADDLE_WIDTH * 3;
+            const hitboxHeight = PADDLE_HEIGHT * 1.5;
+            
+            const ballSide = getBallSide();
+            const canHit = ballSide === 'player2' && (!state.mustBounceBeforeHit || state.hasBouncedOnCurrentSide);
+            
+            let shouldHit = canHit;
+            if (state.mustBounceBeforeHit && !state.hasBouncedOnCurrentSide) {
+                const courtY = app.screen.height * COURT_Y_FACTOR;
+                const gravityMult = state.ballSpin > 0 ? TOPSPIN_GRAVITY_MULT : state.ballSpin < 0 ? SLICE_GRAVITY_MULT : 1;
+                
+                let t = 0;
+                let testX = ball.x;
+                let testY = ball.y;
+                let testVY = ball.vy;
+                
+                while (testY < courtY && testX < screenW && t < 200) {
+                    testVY += GRAVITY * gravityMult;
+                    testX += ball.vx;
+                    testY += testVY;
+                    t++;
+                }
+                
+                const willLandInBounds = testX < screenW && testY >= courtY;
+                shouldHit = willLandInBounds;
+                
+                if (!willLandInBounds) {
+                    console.log('🤖 AI letting ball go out');
+                }
+            }
+            
+            if (shouldHit && circleRectCollision(ball.x, ball.y, BALL_RADIUS, p2.x, p2.y, hitboxWidth, hitboxHeight)) {
+                const courtY = app.screen.height * COURT_Y_FACTOR;
+                const ballHeight = courtY - ball.y;
+                
+                // MORE POWER for low balls to clear net
+                const basePower = ballHeight < 100 ? 16 : 13;
+                const power = basePower + Math.random() * 3;
+                const angle = p2.rotation;
+                
+                // MUCH MORE vertical component when ball is low
+                let verticalBoost = ballHeight < 100 ? 1.2 : 0.75;
+                
+                ball.vx = -Math.cos(angle) * power;
+                ball.vy = -Math.sin(angle) * power * verticalBoost;
+                
+                state.ballSpin = Math.random() > 0.6 ? (Math.random() > 0.5 ? 1 : -1) : 0;
+                
+                state.bounces = 0; 
+                state.lastSideHit = getBallSide();
+                state.mustBounceBeforeHit = true;
+                state.hasBouncedOnCurrentSide = false;
+                
+                console.log('🤖 AI hit | height:', ballHeight.toFixed(0), '| power:', power.toFixed(1), '| angle:', (angle * 180 / Math.PI).toFixed(0), '° | vy:', ball.vy.toFixed(1));
+            }
+        }
+
+        function updateTrail() {
+            if (!state.ballInPlay) return;
+            
+            trailPoints.push({ x: ball.x, y: ball.y, alpha: 1 });
+            if (trailPoints.length > 15) trailPoints.shift();
+            
+            trail.clear();
+            for (let i = 0; i < trailPoints.length; i++) {
+                const point = trailPoints[i];
+                const alpha = (i / trailPoints.length) * 0.6;
+                const size = (i / trailPoints.length) * BALL_RADIUS;
+                trail.circle(point.x, point.y, size);
+                trail.fill({ color: 0xFFFF00, alpha });
+            }
+        }
+
+        function gameLoop(ticker) {
+            if (state.gameOver) return;
+            
+            let delta = ticker.deltaTime || 1;
+            
+            const timeScale = state.shotCharging ? 0.4 : 1.0;
+            const ballDelta = delta * timeScale;
+            const paddleDelta = delta;
+            
+            if (state.shotCharging) {
+                state.shotPower = Math.min(MAX_SHOT_POWER, state.shotPower + SHOT_CHARGE_RATE * delta);
+            }
+            
+            updatePaddlePositions(paddleDelta);
+            updatePlayerSwing(paddleDelta);
+            updateTrail();
+            
+            if (state.ballInPlay) {
+                aiLogic(ballDelta);
+                
+                const gravityMult = state.ballSpin > 0 ? TOPSPIN_GRAVITY_MULT : state.ballSpin < 0 ? SLICE_GRAVITY_MULT : 1;
+                ball.vy += GRAVITY * gravityMult * ballDelta; 
+                ball.x += ball.vx * ballDelta; 
+                ball.y += ball.vy * ballDelta;
+                const screenW = app.screen.width, screenH = app.screen.height;
+                const courtY = screenH * COURT_Y_FACTOR; 
+                const ballSide = getBallSide();
+                
+                if (ball.y + BALL_RADIUS >= courtY) {
+                    ball.y = courtY - BALL_RADIUS; 
+                    ball.vy *= -0.75;
+                    ball.vx *= 0.92;
+                    
+                    state.hasBouncedOnCurrentSide = true;
+                    
+                    if (state.lastSideHit !== null && state.lastSideHit === ballSide) {
+                        state.bounces++;
+                    } else { 
+                        state.lastSideHit = ballSide; 
+                        state.bounces = 1; 
+                    }
+                    
+                    if (state.bounces >= 2) {
+                        pointOver(ballSide === 'player1' ? 'player2' : 'player1');
+                    }
+                }
+                
+                if (ball.y - BALL_RADIUS <= 0) { 
+                    ball.y = BALL_RADIUS; 
+                    ball.vy *= -0.8; 
+                }
+                
+                if (ball.x + BALL_RADIUS < 0 || ball.x - BALL_RADIUS > screenW) { 
+                    pointOver(ball.x < 0 ? 'player2' : 'player1'); 
+                }
+                
+                const netX = screenW / 2;
+                const netY = courtY - NET_HEIGHT;
+                if (Math.abs(ball.x - netX) < NET_WIDTH / 2 + BALL_RADIUS && 
+                    ball.y > netY - BALL_RADIUS && ball.y < courtY) {
+                    
+                    if (ball.y < netY + 20) {
+                        ball.vy = -Math.abs(ball.vy) * 0.4;
+                        ball.vx *= 0.6;
+                        ball.y = netY - BALL_RADIUS - 3;
+                    } else {
+                        ball.vx *= -0.3;
+                        ball.x += ball.vx > 0 ? 10 : -10;
+                    }
+                }
+            }
+        }
+
+        function pointOver(winner) {
+            if (!state.ballInPlay) return;
+            const loser = winner === 'player1' ? 'player2' : 'player1';
+            state.scores[winner].points++;
+            updateScore(winner, loser);
+            resetRound();
+        }
+
+        function updateScore(winner, loser) {
+            const p1Score = state.scores.player1, p2Score = state.scores.player2;
+            const winnerPoints = state.scores[winner].points, loserPoints = state.scores[loser].points;
+            if (winnerPoints >= 4 && winnerPoints - loserPoints >= 2) {
+                p1Score.points = 0; p2Score.points = 0; state.scores[winner].games++;
+                if (state.scores[winner].games >= 6 && state.scores[winner].games - state.scores[loser].games >= 2) {
+                    p1Score.games = 0; p2Score.games = 0; state.scores[winner].sets++;
+                    if (state.scores[winner].sets >= 2) { 
+                        state.gameOver = true; 
+                        showMessage(`${winner === 'player1' ? 'YOU' : 'AI'} WIN!`, true); 
+                    }
+                }
+            }
+            updateScoreUI();
+        }
+
+        function updateScoreUI() {
+            const p1s = state.scores.player1, p2s = state.scores.player2; 
+            const tennisPoints = ["0", "15", "30", "40"];
+            let p1Display, p2Display;
+            
+            if (p1s.points >= 3 && p2s.points >= 3) {
+                if (p1s.points === p2s.points) { 
+                    p1Display = "Deuce"; p2Display = ""; 
+                } else if (p1s.points > p2s.points) { 
+                    p1Display = "Ad"; p2Display = ""; 
+                } else { 
+                    p1Display = ""; p2Display = "Ad"; 
+                }
+            } else { 
+                p1Display = tennisPoints[p1s.points]; 
+                p2Display = tennisPoints[p2s.points]; 
+            }
+            
+            const scoreText = (p1Display === "Deuce" || p1Display === "Ad" || p2Display === "Ad") 
+                ? `${p1Display}${p2Display}` 
+                : `${p1s.games}-${p1Display} | ${p2Display}-${p2s.games}`;
+            
+            scoreElement.innerText = scoreText; 
+            setsElement.innerText = `Sets: ${p1s.sets} - ${p2s.sets}`;
+        }
+
+        function resetRound() {
+            state.ballInPlay = false; 
+            ball.x = -2000;
+            ball.y = -2000;
+            ball.vx = 0; 
+            ball.vy = 0;
+            trailPoints = [];
+            trail.clear();
+            
+            if (!state.gameOver) {
+                setTimeout(startServe, 1200);
+            }
+        }
+        
+        function circleRectCollision(cx, cy, radius, rx, ry, rw, rh) {
+            const dx = Math.abs(cx - rx);
+            const dy = Math.abs(cy - ry);
+            
+            if (dx > (rw / 2 + radius)) return false;
+            if (dy > (rh / 2 + radius)) return false;
+            if (dx <= (rw / 2)) return true;
+            if (dy <= (rh / 2)) return true;
+            
+            const cornerDist = Math.pow(dx - rw / 2, 2) + Math.pow(dy - rh / 2, 2);
+            return cornerDist <= Math.pow(radius, 2);
+        }
+        
+        function showMessage(text, isPersistent = false) { 
+            messageElement.innerText = text; 
+            messageElement.style.display = 'block'; 
+            if (!isPersistent) setTimeout(hideMessage, 1000); 
+        }
+        
+        function hideMessage() { 
+            messageElement.style.display = 'none'; 
+        }
+        
+        function getBallSide() { 
+            return ball.x < app.screen.width / 2 ? 'player1' : 'player2'; 
+        }
+
+        // --- Main Execution ---
+        app = new PIXI.Application();
+        await app.init({ background: 0x000000, resizeTo: window, antialias: true });
+        document.body.appendChild(app.canvas);
+        
+        initializeGameState();
+        setupScene();
+        addControls();
+        
+        app.renderer.on('resize', resizeAndPosition);
+        resizeAndPosition();
+        
+        updateScoreUI();
+        setTimeout(startServe, 1000);
+        app.ticker.add(gameLoop);
+    });
+    </script>
+</body>
+</html>
