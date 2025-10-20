@@ -37,6 +37,7 @@
         const COURT_Y_FACTOR = 0.75;
         const MAX_PADDLE_ANGLE = Math.PI / 6;
         const PADDLE_SPEED = 0.35;
+        const AI_PADDLE_SPEED_X = 0.08; // <-- Add this line
         
         const scoreElement = document.getElementById('score');
         const setsElement = document.getElementById('sets');
@@ -235,18 +236,15 @@
             const hitboxHeight = PADDLE_HEIGHT * 1.5;
             
             const ballSide = getBallSide();
-            const canHit = ballSide === 'player1' && (!state.mustBounceBeforeHit || state.hasBouncedOnCurrentSide);
+            // Player can hit the ball any time it's on their side
+            const canHit = ballSide === 'player1'; 
             
             if (canHit && circleRectCollision(ball.x, ball.y, BALL_RADIUS, p1.x, p1.y, hitboxWidth, hitboxHeight)) { 
                 hitBall(swingRatio); 
                 p1.swing.active = false; 
                 p1.x = p1.baseX; 
-            } else if (!canHit && circleRectCollision(ball.x, ball.y, BALL_RADIUS, p1.x, p1.y, hitboxWidth, hitboxHeight)) {
-                console.log('❌ Illegal hit before bounce!');
-                pointOver('player2');
-                p1.swing.active = false;
-                p1.x = p1.baseX;
-            }
+            } 
+            // Removed the 'else if (!canHit...)' block that applied the penalty
             
             if (p1.swing.progress >= SWING_DURATION) { 
                 p1.swing.active = false; 
@@ -356,13 +354,15 @@
             }
             
             // AI tracks ball on its side
+            let targetX_AI;
+            
             if (state.ballInPlay && ball.x >= screenW / 2) {
-                // Move to intercept ball horizontally
+                // Calculate target X
                 const minX = screenW / 2 + 50;
                 const maxX = screenW - PADDLE_WIDTH * 2;
-                player2.baseX = Math.max(minX, Math.min(maxX, ball.x));
+                targetX_AI = Math.max(minX, Math.min(maxX, ball.x));
                 
-                // Move to intercept ball vertically
+                // Calculate target Y
                 if (ball.y > minY && ball.y < maxY) {
                     player2.targetY = ball.y;
                 } else {
@@ -370,10 +370,14 @@
                 }
             } else {
                 // Return to default position
-                player2.baseX = screenW * 0.8;
+                targetX_AI = screenW * 0.8;
                 player2.targetY = courtY - NET_HEIGHT / 2;
             }
             
+            // Interpolate AI horizontal movement (slower)
+            player2.baseX += (targetX_AI - player2.baseX) * AI_PADDLE_SPEED_X;
+            
+            // Apply vertical auto-position interpolation (fast)
             player1.y += (player1.targetY - player1.y) * PADDLE_SPEED;
             player2.y += (player2.targetY - player2.y) * PADDLE_SPEED;
             
