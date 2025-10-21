@@ -597,47 +597,54 @@ window.addEventListener("load", async () => {
     state.aiCanHit = true; // Allow AI to hit next
     state.aiWillMissThisShot = undefined; // Reset AI miss chance
   }
-function updateAI(delta) {
+  function updateAI(delta) {
     const p2 = player2;
     const screenW = app.screen.width,
-        screenH = app.screen.height;
+      screenH = app.screen.height;
     const courtY = screenH * COURT_Y_FACTOR;
     const ballSide = getBallSide();
     const isAiTurn = state.ballInPlay && ballSide === "player2";
     const isAiExecutingServe =
-        !state.lastPaddleHitSide && ballSide === "player2"; // True only during AI serve toss & hit sequence
+      !state.lastPaddleHitSide && ballSide === "player2"; // True only during AI serve toss & hit sequence
     const isAiReturningServe =
-        state.lastPaddleHitSide === "player1" &&
-        !state.hasBouncedOnCurrentSide &&
-        ballSide === "player2"; // True when player serves to AI
+      state.lastPaddleHitSide === "player1" &&
+      !state.hasBouncedOnCurrentSide &&
+      ballSide === "player2"; // True when player serves to AI
 
     // --- Define Serve Position ---
     const serveContactHeight = courtY - C.NET_HEIGHT * 1.3;
     // *** Explicitly define the X position AI should be at during serve ***
     const serveWaitX = screenW / 2 + C.PADDLE_WIDTH * 3.0; // Fixed X target for serve hit
 
-
     // --- AI Paddle Movement ---
     // --- Normal Movement Logic for Rally/Return ---
-    // NOTE: This logic now ALSO handles isAiExecutingServe, allowing the
-    // AI to naturally track its own serve toss.
     let targetX_AI = screenW * 0.8; // Default X
     let targetY_AI = courtY - C.NET_HEIGHT / 2; // Default Y
     const minY_AI = C.PADDLE_HEIGHT / 2 + C.PADDLE_Y_MARGIN;
     const maxY_AI = courtY - C.PADDLE_HEIGHT / 2 - C.PADDLE_Y_MARGIN;
     let current_ai_x_speed = AI_PADDLE_SPEED_X; // Default rally speed
 
+    // --- CHANGE 1: Define a flat intercept height ---
+    const interceptY_AI = courtY - C.NET_HEIGHT * 1.1; // AI waits here, doesn't follow ball to floor
+
     if (isAiReturningServe && state.aiTargetX !== null) {
-        targetX_AI = state.aiTargetX;
-        targetY_AI = serveContactHeight;
-        current_ai_x_speed = AI_SERVE_PADDLE_SPEED_X;
-    } else if (isAiTurn) { // Rally movement (and now, Serve movement)
-        const minX_AI = screenW / 2 + C.AI_PADDLE_MIN_X_MARGIN;
-        const maxX_AI = screenW - C.PADDLE_WIDTH * 2;
-        targetX_AI = Math.max(minX_AI, Math.min(maxX_AI, ball.x));
-        if (ball.y > minY_AI && ball.y < maxY_AI) { targetY_AI = ball.y; }
-        else { targetY_AI = courtY - C.NET_HEIGHT / 2; }
-        current_ai_x_speed = AI_PADDLE_SPEED_X;
+      targetX_AI = state.aiTargetX;
+      targetY_AI = serveContactHeight;
+      current_ai_x_speed = AI_SERVE_PADDLE_SPEED_X;
+    } else if (isAiTurn) {
+      // Rally movement (and now, Serve movement)
+      const minX_AI = screenW / 2 + C.AI_PADDLE_MIN_X_MARGIN;
+      const maxX_AI = screenW - C.PADDLE_WIDTH * 2;
+      targetX_AI = Math.max(minX_AI, Math.min(maxX_AI, ball.x));
+
+      // --- CHANGE 1 (Continued): Use the intercept height ---
+      if (ball.y > minY_AI && ball.y < maxY_AI) {
+        // Don't follow the ball lower than the intercept height
+        targetY_AI = Math.min(ball.y, interceptY_AI);
+      } else {
+        targetY_AI = courtY - C.NET_HEIGHT / 2; // Default
+      }
+      current_ai_x_speed = AI_PADDLE_SPEED_X;
     }
     // else: Ball on player side, target remains default
 
@@ -648,71 +655,216 @@ function updateAI(delta) {
     p2.targetY = targetY_AI;
     p2.y += (p2.targetY - p2.y) * ai_y_interp;
     p2.x = p2.baseX; // Visual X follows base X
-     // --- End AI Paddle Movement ---
-
+    // --- End AI Paddle Movement ---
 
     // --- AI Hitting Logic ---
     if (!isAiTurn) {
-        p2.rotation *= 0.85; // Reset angle slowly if not AI's turn
-        return;
+      p2.rotation *= 0.85; // Reset angle slowly if not AI's turn
+      return;
     }
 
-    let missChance = 0, baseShotSpeed = 0, velocityError = 0, targetAccuracy = 0, targetSpread = 0;
+    let missChance = 0,
+      baseShotSpeed = 0,
+      velocityError = 0,
+      targetAccuracy = 0,
+      targetSpread = 0;
     // Difficulty settings (same as before)
-    switch (AI_DIFFICULTY) { /* ... */
-        case "beginner": missChance=0.25; baseShotSpeed=C.AI_BEGINNER_SHOT_SPEED; velocityError=0.3; targetAccuracy=0.4; targetSpread=0.2; break;
-        case "medium": missChance=0.1; baseShotSpeed=C.AI_MEDIUM_SHOT_SPEED; velocityError=0.15; targetAccuracy=0.6; targetSpread=0.3; break;
-        case "expert": missChance=0.03; baseShotSpeed=C.AI_EXPERT_SHOT_SPEED; velocityError=0.08; targetAccuracy=0.85; targetSpread=0.4; break;
-     }
-    if (isAiExecutingServe) { missChance = 0; velocityError = 0.01; }
+    switch (AI_DIFFICULTY /* ... */) {
+      case "beginner":
+        missChance = 0.25;
+        baseShotSpeed = C.AI_BEGINNER_SHOT_SPEED;
+        velocityError = 0.3;
+        targetAccuracy = 0.4;
+        targetSpread = 0.2;
+        break;
+      case "medium":
+        missChance = 0.1;
+        baseShotSpeed = C.AI_MEDIUM_SHOT_SPEED;
+        velocityError = 0.15;
+        targetAccuracy = 0.6;
+        targetSpread = 0.3;
+        break;
+      case "expert":
+        missChance = 0.03;
+        baseShotSpeed = C.AI_EXPERT_SHOT_SPEED;
+        velocityError = 0.08;
+        targetAccuracy = 0.85;
+        targetSpread = 0.4;
+        break;
+    }
+    if (isAiExecutingServe) {
+      missChance = 0;
+      velocityError = 0.01;
+    }
 
     // Miss chance (same as before)
-    if (state.aiWillMissThisShot === undefined && !isAiExecutingServe && state.mustBounceBeforeHit && !state.hasBouncedOnCurrentSide) { /* ... */
-        const powerFactor = state.shotPower / C.MAX_SHOT_POWER; const isPlayerPowerShot = powerFactor > 0.7; const effectiveMissChance = missChance * (isPlayerPowerShot ? 1.5 : 1.0); state.aiWillMissThisShot = Math.random() < effectiveMissChance;
+    if (
+      state.aiWillMissThisShot === undefined &&
+      !isAiExecutingServe &&
+      state.mustBounceBeforeHit &&
+      !state.hasBouncedOnCurrentSide
+    ) {
+      /* ... */
+      const powerFactor = state.shotPower / C.MAX_SHOT_POWER;
+      const isPlayerPowerShot = powerFactor > 0.7;
+      const effectiveMissChance = missChance * (isPlayerPowerShot ? 1.5 : 1.0);
+      state.aiWillMissThisShot = Math.random() < effectiveMissChance;
     }
     if (state.aiWillMissThisShot === true) return;
 
     // Hit conditions
     const hitboxWidth = C.PADDLE_WIDTH * 4; // *** WIDER hitbox for serve debugging ***
     const hitboxHeight = C.PADDLE_HEIGHT * 1.8; // *** TALLER hitbox for serve debugging ***
-    const canHit = state.aiCanHit && (isAiExecutingServe || !state.mustBounceBeforeHit || state.hasBouncedOnCurrentSide);
+    const canHit =
+      state.aiCanHit &&
+      (isAiExecutingServe ||
+        !state.mustBounceBeforeHit ||
+        state.hasBouncedOnCurrentSide);
 
     // *** EXTREMELY SIMPLE SERVE HIT CONDITION ***
     // Just check if it's the serve phase and the collision happens
     const isInServeWindow = isAiExecutingServe;
 
-    const isInRallyWindow = !isAiExecutingServe && state.hasBouncedOnCurrentSide && (ball.vy >= 0 || ball.y > courtY - C.NET_HEIGHT * 1.5);
+    // (This is the line from the previous fix - it's correct)
+    const isInRallyWindow =
+      !isAiExecutingServe && state.hasBouncedOnCurrentSide;
 
     // Use basic collision check as primary trigger if window conditions are met
-    const isInHittingZone = circleRectCollision(ball.x, ball.y, C.BALL_RADIUS, p2.x, p2.y, hitboxWidth, hitboxHeight, p2.rotation);
-    const isPaddleInPositionForServeReturn = !isAiReturningServe || state.aiTargetX === null || Math.abs(p2.x - state.aiTargetX) < C.PADDLE_WIDTH * 1.5;
-
+    const isInHittingZone = circleRectCollision(
+      ball.x,
+      ball.y,
+      C.BALL_RADIUS,
+      p2.x,
+      p2.y,
+      hitboxWidth,
+      hitboxHeight,
+      p2.rotation,
+    );
+    const isPaddleInPositionForServeReturn =
+      !isAiReturningServe ||
+      state.aiTargetX === null ||
+      Math.abs(p2.x - state.aiTargetX) < C.PADDLE_WIDTH * 1.5;
 
     if (
-        canHit &&
-        isInHittingZone && // Basic collision MUST occur
-        isPaddleInPositionForServeReturn && // Still relevant for returns
-        (isInServeWindow || isInRallyWindow) // Check phase
+      canHit &&
+      isInHittingZone && // Basic collision MUST occur
+      isPaddleInPositionForServeReturn && // Still relevant for returns
+      (isInServeWindow || isInRallyWindow) // Check phase
     ) {
-        let vx, vy, targetX;
+      let vx, vy, targetX;
 
-        if (isAiExecutingServe) {
-            // AI Serve Execution (same logic as before)
-             state.ballSpin = -1; targetX = screenW * (0.2 + Math.random() * 0.1); const targetY = courtY - C.BALL_RADIUS; const serveSpeed = baseShotSpeed * 0.95 * (1 + (Math.random() - 0.5) * velocityError); const { calcVx, calcVy } = calculateShotVelocity(ball.x, ball.y, targetX, targetY, serveSpeed, SLICE_GRAVITY_MULT, C.AI_NET_CLEARANCE_VY * 1.8); vx = calcVx; vy = calcVy;
+      if (isAiExecutingServe) {
+        // AI Serve Execution (same logic as before)
+        state.ballSpin = -1;
+        targetX = screenW * (0.2 + Math.random() * 0.1);
+        const targetY = courtY - C.BALL_RADIUS;
+        const serveSpeed =
+          baseShotSpeed * 0.95 * (1 + (Math.random() - 0.5) * velocityError);
+        const { calcVx, calcVy } = calculateShotVelocity(
+          ball.x,
+          ball.y,
+          targetX,
+          targetY,
+          serveSpeed,
+          SLICE_GRAVITY_MULT,
+          C.AI_NET_CLEARANCE_VY * 1.8,
+        );
+        vx = calcVx;
+        vy = calcVy;
+      } else {
+        // AI Rally Shot OR Serve Return
+        const playerCourtWidth = screenW / 2;
+        const targetableMinX = C.PADDLE_WIDTH * 4;
+        const targetableMaxX = playerCourtWidth - C.AI_CENTER_MARGIN;
+        const targetableWidth = targetableMaxX - targetableMinX;
+        const randomTargetPoint =
+          targetableMinX +
+          targetableWidth *
+            (0.5 - targetAccuracy / 2 + Math.random() * targetAccuracy);
+        targetX =
+          randomTargetPoint +
+          (Math.random() - 0.5) * targetableWidth * targetSpread;
+        const targetY = courtY - C.BALL_RADIUS * (1.7 + Math.random() * 0.6);
+        if (isAiReturningServe) {
+          state.ballSpin = -1;
         } else {
-             // AI Rally Shot OR Serve Return (same logic as before)
-             const playerCourtWidth = screenW / 2; const targetableMinX = C.PADDLE_WIDTH * 4; const targetableMaxX = playerCourtWidth - C.AI_CENTER_MARGIN; const targetableWidth = targetableMaxX - targetableMinX; const randomTargetPoint = targetableMinX + targetableWidth * (0.5 - targetAccuracy / 2 + Math.random() * targetAccuracy); targetX = randomTargetPoint + (Math.random() - 0.5) * targetableWidth * targetSpread; const targetY = courtY - C.BALL_RADIUS * (1.7 + Math.random() * 0.6); if (isAiReturningServe) { state.ballSpin = -1; } else { const incomingSpin = state.lastShotType === 'topspin' ? 1 : state.lastShotType === 'slice' ? -1 : 0; const isHighBall = courtY - ball.y > C.NET_HEIGHT * 0.8; const isMidHeightBall = courtY - ball.y > C.NET_HEIGHT * 0.3; let randomFactor = Math.random(); if (!isMidHeightBall && randomFactor < 0.3) { state.ballSpin = 0; } else if (randomFactor < 0.6) { state.ballSpin = incomingSpin > 0 ? -1 : 1; } else { state.ballSpin = incomingSpin !== 0 ? incomingSpin : -1; } if (isHighBall && Math.random() < 0.8) { state.ballSpin = 1; } } const gravityMult = state.ballSpin > 0 ? TOPSPIN_GRAVITY_MULT : state.ballSpin < 0 ? SLICE_GRAVITY_MULT : 1.0; const shotSpeed = baseShotSpeed * (isAiReturningServe ? 0.9 : 1.05) * (1 + (Math.random() - 0.5) * velocityError); const netClearance = C.AI_NET_CLEARANCE_VY * (isAiReturningServe ? 1.1 : 0.8); const { calcVx, calcVy } = calculateShotVelocity(ball.x, ball.y, targetX, targetY, shotSpeed, gravityMult, netClearance); vx = calcVx; vy = calcVy;
-        }
+          const incomingSpin =
+            state.lastShotType === "topspin"
+              ? 1
+              : state.lastShotType === "slice"
+                ? -1
+                : 0;
+          const isHighBall = courtY - ball.y > C.NET_HEIGHT * 0.8;
+          const isMidHeightBall = courtY - ball.y > C.NET_HEIGHT * 0.3;
 
-        // Apply calculated velocity and update state (Common logic - same as before)
-        ball.vx = vx; ball.vy = vy; p2.rotation = Math.max(-MAX_PADDLE_ANGLE, Math.min(MAX_PADDLE_ANGLE, Math.atan2(-vy, -vx))); state.bounces = 0; state.lastPaddleHitSide = "player2"; state.lastBounceSide = null; state.mustBounceBeforeHit = true; state.hasBouncedOnCurrentSide = false; state.aiCanHit = false; state.aiWillMissThisShot = undefined; if (isAiReturningServe) { state.aiTargetX = null; }
+          // --- CHANGE 2: Smartly counter topspin with a slice ---
+          if (incomingSpin > 0 && Math.random() < 0.75) {
+            // High chance (75%) to counter topspin with slice
+            state.ballSpin = -1;
+          } else {
+            // Fallback to original varied logic
+            let randomFactor = Math.random();
+            if (!isMidHeightBall && randomFactor < 0.3) {
+              state.ballSpin = 0;
+            } else if (randomFactor < 0.6) {
+              state.ballSpin = incomingSpin > 0 ? -1 : 1;
+            } else {
+              state.ballSpin = incomingSpin !== 0 ? incomingSpin : -1;
+            }
+            if (isHighBall && Math.random() < 0.8) {
+              state.ballSpin = 1;
+            }
+          }
+        }
+        const gravityMult =
+          state.ballSpin > 0
+            ? TOPSPIN_GRAVITY_MULT
+            : state.ballSpin < 0
+              ? SLICE_GRAVITY_MULT
+              : 1.0;
+        const shotSpeed =
+          baseShotSpeed *
+          (isAiReturningServe ? 0.9 : 1.05) *
+          (1 + (Math.random() - 0.5) * velocityError);
+        const netClearance =
+          C.AI_NET_CLEARANCE_VY * (isAiReturningServe ? 1.1 : 0.8);
+        const { calcVx, calcVy } = calculateShotVelocity(
+          ball.x,
+          ball.y,
+          targetX,
+          targetY,
+          shotSpeed,
+          gravityMult,
+          netClearance,
+        );
+        vx = calcVx;
+        vy = calcVy;
+      }
+
+      // Apply calculated velocity and update state (Common logic - same as before)
+      ball.vx = vx;
+      ball.vy = vy;
+      p2.rotation = Math.max(
+        -MAX_PADDLE_ANGLE,
+        Math.min(MAX_PADDLE_ANGLE, Math.atan2(-vy, -vx)),
+      );
+      state.bounces = 0;
+      state.lastPaddleHitSide = "player2";
+      state.lastBounceSide = null;
+      state.mustBounceBeforeHit = true;
+      state.hasBouncedOnCurrentSide = false;
+      state.aiCanHit = false;
+      state.aiWillMissThisShot = undefined;
+      if (isAiReturningServe) {
+        state.aiTargetX = null;
+      }
     } else {
-        // If not hitting (same as before)
-         // *** Keep angle neutral during serve setup ***
-        if (!isAiExecutingServe) p2.rotation *= 0.85;
-        else p2.rotation = 0; // Force neutral angle while waiting to serve
+      // If not hitting (same as before)
+      // *** Keep angle neutral during serve setup ***
+      if (!isAiExecutingServe) p2.rotation *= 0.85;
+      else p2.rotation = 0; // Force neutral angle while waiting to serve
     }
-}
+  }
 
   function calculateShotVelocity(
     startX,
@@ -1160,6 +1312,7 @@ function updateAI(delta) {
     });
     gameOverScreen.style.display = "none";
     initializeGameState();
+    gameStarted = true; // <-- ADD THIS LINE
     updateScoreUI();
     resetRound(); // Start the first serve
   }
