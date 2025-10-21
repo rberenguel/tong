@@ -1,0 +1,181 @@
+@import url("https://fonts.googleapis.com/css2?family=Sixtyfour&display=swap");
+
+body,
+html {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background-color: #000;
+  font-family: "Sixtyfour", sans-serif;
+  color: #fff;
+  user-select: none;
+  -webkit-user-select: none;
+  /* NEW: Prevent scrolling/panning on touch */
+  touch-action: none;
+}
+
+canvas {
+  display: block;
+}
+
+#ui-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 10;
+}
+
+#score {
+  position: absolute;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: clamp(14px, 6vh, 48px);
+  text-shadow:
+    0 0 10px #fff,
+    0 0 20px #ff00ff,
+    0 0 30px #ff00ff;
+}
+
+#sets {
+  position: absolute;
+  top: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 24px;
+  color: #ccc;
+  display: none; /* Feature not implemented */
+}
+
+#message {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 32px;
+  text-align: center;
+  display: none;
+  text-shadow:
+    0 0 10px #fff,
+    0 0 20px #00ffff,
+    0 0 30px #00ffff;
+}
+
+#controls {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 14px;
+  color: #666;
+  text-align: center;
+}
+
+#shot-indicator {
+  position: absolute;
+  top: 120px;
+  left: 20px;
+  font-size: 18px;
+  color: #0ff;
+  text-shadow: 0 0 5px #0ff;
+}
+
+#intro-screen,
+#game-over-screen {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.95);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  pointer-events: all;
+  padding: 10px 20px;
+  box-sizing: border-box;
+  overflow-y: auto;
+}
+
+#game-over-screen {
+  display: none;
+}
+
+.title {
+  font-size: clamp(40px, 12vw, 100px);
+  margin-bottom: clamp(10px, 2vh, 20px);
+  text-shadow:
+    0 0 20px #ff00ff,
+    0 0 40px #ff00ff,
+    0 0 60px #ff00ff;
+  letter-spacing: 0.1em;
+}
+
+.instructions {
+  max-width: 700px;
+  text-align: center;
+  font-size: clamp(11px, 2.5vh, 14px);
+  line-height: 1.1;
+  margin-bottom: clamp(15px, 3vh, 30px);
+  color: #aaa;
+  font-family: Arial, sans-serif;
+}
+
+.difficulty-selector {
+  display: flex;
+  gap: clamp(8px, 2vh, 12px);
+  margin-bottom: clamp(10px, 2vh, 20px);
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.difficulty-btn,
+.rematch-btn {
+  padding: clamp(10px, 2vh, 15px) clamp(20px, 4vw, 30px);
+  font-size: clamp(12px, 2.5vh, 16px);
+  font-family: "Sixtyfour", sans-serif;
+  background: linear-gradient(45deg, #ff00ff, #00ffff);
+  border: none;
+  color: #000;
+  cursor: pointer;
+  transition: all 0.3s;
+  text-transform: uppercase;
+  font-weight: bold;
+}
+
+.difficulty-btn:hover,
+.rematch-btn:hover {
+  transform: scale(1.1);
+  box-shadow: 0 0 20px #ff00ff;
+}
+
+.difficulty-btn.selected {
+  background: linear-gradient(45deg, #00ff00, #00ffff);
+  box-shadow: 0 0 30px #00ff00;
+}
+
+.game-over-title {
+  font-size: clamp(32px, 10vw, 72px);
+  margin-bottom: 20px;
+  text-shadow:
+    0 0 20px #00ffff,
+    0 0 40px #00ffff;
+}
+
+.final-score {
+  font-size: clamp(24px, 6vw, 48px);
+  margin-bottom: 30px;
+  color: #ccc;
+}
+
+.rematch-options {
+  display: flex;
+  gap: 15px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
