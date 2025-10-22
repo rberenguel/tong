@@ -11,10 +11,12 @@ window.addEventListener("load", async () => {
     serveTrajectoryLine;
   let state = {};
   let trailPoints = [];
-  let particles = [];
+  let particles = []; // Keep track of active particles
   let touchState = {};
   let AI_DIFFICULTY = "medium";
   let gameStarted = false;
+  let motionBlurFilter; // For motion blur effect
+  let particleTexture = null; // Variable for the particle texture
 
   // --- Base Constants (Reference values for scaling) ---
   const BASE_CONSTANTS = {
@@ -37,11 +39,12 @@ window.addEventListener("load", async () => {
     NET_BOUNCE_Y_ADD: 10,
     NET_BOUNCE_VY_ADD: 3,
     POWER_SHOT_THRESHOLD: 20,
-    PARTICLE_VX: 4,
-    PARTICLE_VY: 4,
+    PARTICLE_VX_RANGE: 4, // Changed name for clarity
+    PARTICLE_VY_RANGE: 4, // Changed name for clarity
     PARTICLE_SIZE_MIN: 2,
-    PARTICLE_SIZE_MAX: 3,
-    PARTICLE_LIFE: 20,
+    PARTICLE_SIZE_MAX: 4, // Slightly larger max size
+    PARTICLE_LIFE_MIN: 15, // Added min life
+    PARTICLE_LIFE_MAX: 30, // Added max life
     PADDLE_MARGIN: 50,
     PADDLE_CONTROL_Y_DIV: 150,
     AI_CENTER_MARGIN: 50,
@@ -59,12 +62,17 @@ window.addEventListener("load", async () => {
   const SLICE_GRAVITY_MULT = 0.55;
   const COURT_Y_FACTOR = 0.75;
   const MAX_PADDLE_ANGLE = Math.PI / 6;
-  const PADDLE_SPEED = 0.35; // Interpolation factor for Y movement
-  const AI_PADDLE_SPEED_X = 0.08; // Interpolation factor for AI X movement (rally)
-  const AI_SERVE_PADDLE_SPEED_X = 0.35; // Faster interpolation for AI serve positioning
-
+  const PADDLE_SPEED = 0.35;
+  const AI_PADDLE_SPEED_X = 0.08;
+  const AI_SERVE_PADDLE_SPEED_X = 0.35;
   const PLAYER_COLOR_HEX = "#00FFFF";
   const AI_COLOR_HEX = "#FFA500";
+  const GROUND_COLOR_HEX = "#FF4500"; // Neon Clay Red
+  const BALL_COLOR_HEX = "#FFFF00";
+  const PARTICLE_COUNT_HIT = 12; // Particles on paddle hit
+  const PARTICLE_COUNT_BOUNCE = 8; // Particles on ground bounce
+  const BLUR_STRENGTH_BASE = 6;
+  const BLUR_FADE_RATE = 0.85;
 
   // --- DOM Elements ---
   const scoreElement = document.getElementById("score");
@@ -106,9 +114,17 @@ window.addEventListener("load", async () => {
       startY: 0,
       startPaddleX: 0,
     };
-    particles = [];
+    // Clear existing particles from stage if any
+    for (let i = particles.length - 1; i >= 0; i--) {
+      // Check if particle and its parent exist before removing
+      if (particles[i] && particles[i].parent) {
+        app.stage.removeChild(particles[i]);
+      }
+    }
+    particles = []; // Clear particles array
     trailPoints = [];
     gameStarted = false;
+    if (motionBlurFilter) motionBlurFilter.blur = 0; // Reset blur
   }
 
   async function initializePixiApp() {
@@ -119,6 +135,19 @@ window.addEventListener("load", async () => {
       antialias: true,
     });
     document.body.appendChild(app.canvas);
+
+    // --- Create Particle Texture ---
+    const GFX = new PIXI.Graphics()
+      .circle(0, 0, 5) // Base size 5, will be scaled
+      .fill(0xffffff); // White
+    particleTexture = app.renderer.generateTexture(GFX);
+    // --- End Particle Texture ---
+
+    // Initialize Motion Blur Filter
+    motionBlurFilter = new PIXI.BlurFilter();
+    motionBlurFilter.blur = 0;
+    // Apply filter ONLY to ball and trail (will do in setupScene)
+    // app.stage.filters = [motionBlurFilter]; // REMOVE this line
   }
 
   function setupScene() {
@@ -127,7 +156,7 @@ window.addEventListener("load", async () => {
     trail = new PIXI.Graphics();
     contactLine = new PIXI.Graphics();
     serveTrajectoryLine = new PIXI.Graphics();
-    ball = new PIXI.Graphics();
+    ball = new PIXI.Graphics(); // Keep as Graphics for trail simplicity
     ball.vx = 0;
     ball.vy = 0;
     ball.prevX = 0;
@@ -137,14 +166,20 @@ window.addEventListener("load", async () => {
     player1 = null;
     player2 = null;
 
+    // --- Apply Blur Filter to Ball and Trail ---
+    ball.filters = [motionBlurFilter];
+    trail.filters = [motionBlurFilter];
+    // --- End Filter Application ---
+
     app.stage.addChild(
       floor,
       net,
-      trail,
+      trail, // Add trail
       contactLine,
-      ball,
+      ball, // Add ball
       serveTrajectoryLine,
     );
+    // Note: Particles are added directly to the stage in createParticles
   }
 
   function setupUIListeners() {
@@ -190,8 +225,12 @@ window.addEventListener("load", async () => {
       app.screen.height,
     );
     for (const key in BASE_CONSTANTS) {
-      // Don't scale time-based values
-      if (key !== "SWING_DURATION") {
+      // Don't scale time-based values or particle life
+      if (
+        key !== "SWING_DURATION" &&
+        key !== "PARTICLE_LIFE_MIN" &&
+        key !== "PARTICLE_LIFE_MAX"
+      ) {
         SCALED_CONSTANTS[key] = BASE_CONSTANTS[key] * scaleFactor;
       } else {
         SCALED_CONSTANTS[key] = BASE_CONSTANTS[key];
@@ -208,6 +247,7 @@ window.addEventListener("load", async () => {
       screenH = app.screen.height;
     const courtY = screenH * COURT_Y_FACTOR;
 
+    // --- Update Floor Drawing with New Color ---
     floor
       .clear()
       .rect(
@@ -216,7 +256,10 @@ window.addEventListener("load", async () => {
         screenW,
         3 * (C.BALL_RADIUS / BASE_CONSTANTS.BALL_RADIUS),
       )
-      .fill(0x888888);
+      .fill(GROUND_COLOR_HEX) // Use the new color
+      // Optional: Add a subtle glow effect directly here if needed
+      .stroke({ width: 2, color: GROUND_COLOR_HEX, alpha: 0.5 }); // Simple border glow
+
     net
       .clear()
       .rect(
@@ -238,7 +281,7 @@ window.addEventListener("load", async () => {
 
     redrawPaddle(player1);
     redrawPaddle(player2);
-    ball.clear().circle(0, 0, C.BALL_RADIUS).fill(0xffff00);
+    ball.clear().circle(0, 0, C.BALL_RADIUS).fill(BALL_COLOR_HEX); // Use constant
 
     player1.baseX = screenW * 0.2;
     player2.baseX = screenW * 0.8;
@@ -416,6 +459,80 @@ window.addEventListener("load", async () => {
     }
   }
 
+  // --- Particle System ---
+  function createParticles(
+    x,
+    y,
+    count,
+    color,
+    vxRange,
+    vyRange,
+    lifeMin,
+    lifeMax,
+  ) {
+    // --- Add Check ---
+    if (!particleTexture || !app || !app.stage) {
+      console.error("Particle texture or app stage not ready");
+      return;
+    }
+    // console.log(`Creating ${count} particles at (${x.toFixed(1)}, ${y.toFixed(1)}) color ${color.toString(16)}`); // DEBUG LOG
+
+    for (let i = 0; i < count; i++) {
+      const particle = new PIXI.Sprite(particleTexture); // Use the texture
+      particle.anchor.set(0.5); // Center the anchor
+      // Ensure C values are used correctly, check if they exist
+      const size_min = C.PARTICLE_SIZE_MIN || BASE_CONSTANTS.PARTICLE_SIZE_MIN;
+      const size_max = C.PARTICLE_SIZE_MAX || BASE_CONSTANTS.PARTICLE_SIZE_MAX;
+      const sizeRatio = (Math.random() * (size_max - size_min) + size_min) / 10; // Scale based on original texture size (10 diameter)
+
+      particle.scale.set(sizeRatio);
+      particle.tint = color; // Tint the white texture
+      particle.x = x;
+      particle.y = y;
+      particle.alpha = 0.8 + Math.random() * 0.2;
+
+      const vx_range = C.PARTICLE_VX_RANGE || BASE_CONSTANTS.PARTICLE_VX_RANGE;
+      const vy_range = C.PARTICLE_VY_RANGE || BASE_CONSTANTS.PARTICLE_VY_RANGE;
+      particle.vx = (Math.random() - 0.5) * vx_range * 2;
+      particle.vy = (Math.random() - 0.5) * vy_range * 2;
+
+      const life_min = C.PARTICLE_LIFE_MIN || BASE_CONSTANTS.PARTICLE_LIFE_MIN;
+      const life_max = C.PARTICLE_LIFE_MAX || BASE_CONSTANTS.PARTICLE_LIFE_MAX;
+      particle.initialLife = Math.random() * (life_max - life_min) + life_min;
+      particle.life = particle.initialLife;
+
+      app.stage.addChild(particle); // Add Sprite to the stage
+      particles.push(particle);
+    }
+  }
+
+  function updateParticles(delta) {
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      if (!p) continue; // Skip if particle somehow became null/undefined
+
+      p.x += p.vx * delta;
+      p.y += p.vy * delta;
+      p.vy += (C.GRAVITY || BASE_CONSTANTS.GRAVITY) * 0.2 * delta; // Use C or fallback
+      p.life -= delta; // Decrease life based on delta time
+
+      if (p.life <= 0) {
+        // --- Add Parent Check ---
+        if (p.parent) {
+          app.stage.removeChild(p);
+        }
+        particles.splice(i, 1);
+      } else {
+        // Update alpha directly on the Sprite
+        const lifeRatio = Math.max(0, p.life / p.initialLife);
+        // --- TEMPORARILY REMOVED SCALING ---
+        // const baseSizeRatio = (C.PARTICLE_SIZE_MIN + (C.PARTICLE_SIZE_MAX - C.PARTICLE_SIZE_MIN) * Math.random()) / 10;
+        // p.scale.set(baseSizeRatio * lifeRatio); // Scale based on life
+        p.alpha = lifeRatio * 0.9; // Fade out
+      }
+    }
+  }
+
   // --- Game Update Logic ---
 
   function gameLoop(ticker) {
@@ -427,8 +544,9 @@ window.addEventListener("load", async () => {
 
     if (state.shotCharging) {
       state.shotPower = Math.min(
-        C.MAX_SHOT_POWER,
-        state.shotPower + C.SHOT_CHARGE_RATE * delta,
+        C.MAX_SHOT_POWER || BASE_CONSTANTS.MAX_SHOT_POWER, // Use C or fallback
+        state.shotPower +
+          (C.SHOT_CHARGE_RATE || BASE_CONSTANTS.SHOT_CHARGE_RATE) * delta,
       );
     }
 
@@ -437,35 +555,70 @@ window.addEventListener("load", async () => {
     updateAI(ballDelta); // Handles AI movement and hitting
     updateBall(ballDelta); // Handles ball physics and collision
     updateTrail();
-    updateParticles(ballDelta);
+    updateParticles(gameDelta); // Use gameDelta for particles
+
+    // Motion Blur Update (Only if filter exists)
+    if (motionBlurFilter && ball && trail) {
+      const speed = Math.sqrt(ball.vx * ball.vx + ball.vy * ball.vy);
+      const max_power = C.MAX_SHOT_POWER || BASE_CONSTANTS.MAX_SHOT_POWER;
+      const blur_base = BLUR_STRENGTH_BASE;
+      const targetBlur = Math.min(
+        blur_base * 1.5,
+        (speed / max_power) * blur_base,
+      );
+      // Smoothly fade blur in and out
+      if (motionBlurFilter.blur < targetBlur) {
+        motionBlurFilter.blur += (targetBlur - motionBlurFilter.blur) * 0.2; // Faster increase
+      } else {
+        motionBlurFilter.blur *= BLUR_FADE_RATE ** gameDelta; // Exponential fade out based on delta
+      }
+      // Clamp blur
+      motionBlurFilter.blur = Math.max(
+        0,
+        Math.min(blur_base * 1.5, motionBlurFilter.blur),
+      );
+    }
   }
 
   function updatePlayerPaddle(delta) {
     const courtY = app.screen.height * COURT_Y_FACTOR;
-    const minY = C.PADDLE_HEIGHT / 2 + C.PADDLE_Y_MARGIN;
-    const maxY = courtY - C.PADDLE_HEIGHT / 2 - C.PADDLE_Y_MARGIN;
+    const minY =
+      (C.PADDLE_HEIGHT || BASE_CONSTANTS.PADDLE_HEIGHT) / 2 +
+      (C.PADDLE_Y_MARGIN || BASE_CONSTANTS.PADDLE_Y_MARGIN);
+    const maxY =
+      courtY -
+      (C.PADDLE_HEIGHT || BASE_CONSTANTS.PADDLE_HEIGHT) / 2 -
+      (C.PADDLE_Y_MARGIN || BASE_CONSTANTS.PADDLE_Y_MARGIN);
 
     // Target Y based on ball position (or default)
     if (
       state.ballInPlay &&
+      ball && // Check if ball exists
       ball.x < app.screen.width / 2 &&
       ball.y > minY &&
       ball.y < maxY
     ) {
       player1.targetY = ball.y;
     } else {
-      player1.targetY = courtY - C.NET_HEIGHT / 2; // Default position
+      player1.targetY =
+        courtY - (C.NET_HEIGHT || BASE_CONSTANTS.NET_HEIGHT) / 2; // Default position
     }
 
     // Smooth Y movement
     const interp = 1 - Math.pow(1 - PADDLE_SPEED, delta);
-    player1.y += (player1.targetY - player1.y) * interp;
+    if (player1) player1.y += (player1.targetY - player1.y) * interp;
 
     // Visuals during charge (moved from updatePlayerSwing)
     contactLine.clear();
-    if (state.shotCharging) {
-      const chargeRatio = Math.min(1, state.shotPower / C.MAX_SHOT_POWER);
-      player1.x = player1.baseX - chargeRatio * C.SWING_DISTANCE; // Move back
+    if (state.shotCharging && player1) {
+      // Check if player1 exists
+      const max_power = C.MAX_SHOT_POWER || BASE_CONSTANTS.MAX_SHOT_POWER;
+      const swing_dist = C.SWING_DISTANCE || BASE_CONSTANTS.SWING_DISTANCE;
+      const paddle_w = C.PADDLE_WIDTH || BASE_CONSTANTS.PADDLE_WIDTH;
+      const paddle_h = C.PADDLE_HEIGHT || BASE_CONSTANTS.PADDLE_HEIGHT;
+
+      const chargeRatio = Math.min(1, state.shotPower / max_power);
+      player1.x = player1.baseX - chargeRatio * swing_dist; // Move back
       player1.scale.set(1 - chargeRatio * 0.4, 1 + chargeRatio * 0.2); // Squash/stretch
       redrawPaddle(player1); // Redraw with scaling
 
@@ -474,29 +627,30 @@ window.addEventListener("load", async () => {
         const glowSize = 3 + chargeRatio * 8;
         player1
           .rect(
-            -C.PADDLE_WIDTH / 2 - glowSize,
-            -C.PADDLE_HEIGHT / 2 - glowSize,
-            C.PADDLE_WIDTH + glowSize * 2,
-            C.PADDLE_HEIGHT + glowSize * 2,
+            -paddle_w / 2 - glowSize,
+            -paddle_h / 2 - glowSize,
+            paddle_w + glowSize * 2,
+            paddle_h + glowSize * 2,
           )
           .stroke({ width: 3, color: 0xffffff, alpha: chargeRatio });
       }
       if (chargeRatio > 0.9) {
         const pulse = Math.sin(Date.now() / 50) * 0.5 + 0.5;
         player1
-          .circle(0, 0, C.PADDLE_HEIGHT / 2 + 10)
+          .circle(0, 0, paddle_h / 2 + 10)
           .stroke({ width: 2, color: 0xff0000, alpha: pulse * 0.8 });
       }
 
       // Contact line visualization
-      const lineLength = C.PADDLE_HEIGHT * 1.25;
+      const lineLength = paddle_h * 1.25;
       contactLine
         .rect(-1, -lineLength / 2, 2, lineLength)
         .fill({ color: PLAYER_COLOR_HEX, alpha: chargeRatio * 0.8 });
-      contactLine.x = player1.baseX + (C.SWING_DISTANCE * 1.5) / 2; // Position ahead
+      contactLine.x = player1.baseX + (swing_dist * 1.5) / 2; // Position ahead
       contactLine.y = player1.y;
       contactLine.rotation = player1.rotation;
-    } else if (!player1.swing.active) {
+    } else if (player1 && !player1.swing.active) {
+      // Check player1 exists
       // Ensure paddle is at base position if not charging or swinging
       player1.x = player1.baseX;
       if (player1.scale.x !== 1 || player1.scale.y !== 1) {
@@ -507,26 +661,34 @@ window.addEventListener("load", async () => {
   }
 
   function updatePlayerSwing(delta) {
-    if (!player1.swing.active) return;
+    if (!player1 || !player1.swing.active) return; // Check player1 exists
 
     player1.swing.progress += delta;
-    const swingRatio = Math.min(1, player1.swing.progress / C.SWING_DURATION);
+    const swing_duration = C.SWING_DURATION || BASE_CONSTANTS.SWING_DURATION;
+    const swing_dist = C.SWING_DISTANCE || BASE_CONSTANTS.SWING_DISTANCE;
+
+    const swingRatio = Math.min(1, player1.swing.progress / swing_duration);
     const swingArc = Math.sin(swingRatio * Math.PI); // Creates the forward motion arc
-    player1.x = player1.baseX + swingArc * C.SWING_DISTANCE * 1.5; // Apply forward swing motion
+    player1.x = player1.baseX + swingArc * swing_dist * 1.5; // Apply forward swing motion
 
     // Hit detection
-    const hitboxWidth = C.PADDLE_WIDTH * 3;
-    const hitboxHeight = C.PADDLE_HEIGHT * 1.5;
+    const paddle_w = C.PADDLE_WIDTH || BASE_CONSTANTS.PADDLE_WIDTH;
+    const paddle_h = C.PADDLE_HEIGHT || BASE_CONSTANTS.PADDLE_HEIGHT;
+    const ball_r = C.BALL_RADIUS || BASE_CONSTANTS.BALL_RADIUS;
+
+    const hitboxWidth = paddle_w * 3;
+    const hitboxHeight = paddle_h * 1.5;
     const canHit =
       getBallSide() === "player1" &&
       (!state.mustBounceBeforeHit || state.hasBouncedOnCurrentSide);
 
     if (
       canHit &&
+      ball && // Check ball exists
       circleRectCollision(
         ball.x,
         ball.y,
-        C.BALL_RADIUS,
+        ball_r,
         player1.x,
         player1.y,
         hitboxWidth,
@@ -541,7 +703,7 @@ window.addEventListener("load", async () => {
     }
 
     // End swing if duration exceeded
-    if (player1.swing.progress >= C.SWING_DURATION) {
+    if (player1.swing.progress >= swing_duration) {
       player1.swing.active = false;
       player1.x = player1.baseX; // Reset position
       state.shotPower = 0; // Reset power if swing missed
@@ -549,7 +711,19 @@ window.addEventListener("load", async () => {
   }
 
   function hitBall(timingFactor) {
-    const basePower = C.HIT_POWER + state.shotPower * 0.8;
+    // console.log("Player hit triggered"); // DEBUG LOG
+    const hit_power = C.HIT_POWER || BASE_CONSTANTS.HIT_POWER;
+    const power_thresh =
+      C.POWER_SHOT_THRESHOLD || BASE_CONSTANTS.POWER_SHOT_THRESHOLD;
+    const ball_r = C.BALL_RADIUS || BASE_CONSTANTS.BALL_RADIUS;
+    const particle_vx = C.PARTICLE_VX_RANGE || BASE_CONSTANTS.PARTICLE_VX_RANGE;
+    const particle_vy = C.PARTICLE_VY_RANGE || BASE_CONSTANTS.PARTICLE_VY_RANGE;
+    const particle_life_min =
+      C.PARTICLE_LIFE_MIN || BASE_CONSTANTS.PARTICLE_LIFE_MIN;
+    const particle_life_max =
+      C.PARTICLE_LIFE_MAX || BASE_CONSTANTS.PARTICLE_LIFE_MAX;
+
+    const basePower = hit_power + state.shotPower * 0.8;
     const timingBonus = 1 - Math.abs(0.5 - timingFactor) * 2; // 1 = perfect, 0 = edge
     const isPerfectTiming = timingBonus > 0.8;
     let power = basePower * (1 + timingBonus * 0.5); // Apply timing bonus
@@ -572,33 +746,75 @@ window.addEventListener("load", async () => {
     state.lastShotType = shotType;
 
     // Calculate ball velocity based on power and angle
-    ball.vx = Math.cos(player1.rotation) * power * GAME_SPEED_MODIFIER;
-    if (shotType === "slice") {
-      ball.vy = -Math.sin(Math.abs(player1.rotation)) * power * 0.3; // Lower angle for slice
-    } else {
-      ball.vy = -Math.sin(player1.rotation) * power * 0.55; // Normal/topspin angle
+    if (ball) {
+      // Check ball exists
+      ball.vx = Math.cos(player1.rotation) * power * GAME_SPEED_MODIFIER;
+      if (shotType === "slice") {
+        ball.vy = -Math.sin(Math.abs(player1.rotation)) * power * 0.3; // Lower angle for slice
+      } else {
+        ball.vy = -Math.sin(player1.rotation) * power * 0.55; // Normal/topspin angle
+      }
     }
 
+    // --- Corrected paddleColor ---
+    const paddleColor = PLAYER_COLOR_HEX; // Player 1 is hitting
+    const hitX = ball
+      ? ball.x + Math.cos(player1.rotation) * ball_r
+      : player1.x; // Approx hit point
+    const hitY = ball
+      ? ball.y - Math.sin(player1.rotation) * ball_r
+      : player1.y;
+
+    // --- Add Paddle Hit Particles ---
+    createParticles(
+      hitX,
+      hitY,
+      PARTICLE_COUNT_HIT,
+      paddleColor,
+      particle_vx * 1.5, // Wider spread for hits
+      particle_vy * 1.5,
+      particle_life_min,
+      particle_life_max,
+    );
+    if (motionBlurFilter) motionBlurFilter.blur = BLUR_STRENGTH_BASE * 1.5; // Add blur spike
+
     // Power shot effect
-    if (isPerfectTiming && state.shotPower > C.POWER_SHOT_THRESHOLD) {
-      createFireEffect(ball.x, ball.y);
-      ball.vx *= 1.3;
-      ball.vy *= 1.1; // Add slight vertical boost too
+    if (isPerfectTiming && state.shotPower > power_thresh) {
+      createParticles(
+        // More intense particles for power shot
+        hitX,
+        hitY,
+        PARTICLE_COUNT_HIT * 2,
+        paddleColor,
+        particle_vx * 2.5,
+        particle_vy * 2.5,
+        particle_life_min * 1.2,
+        particle_life_max * 1.2,
+      );
+      if (motionBlurFilter) motionBlurFilter.blur = BLUR_STRENGTH_BASE * 2; // Extra blur spike
       showMessage("POWER SHOT! 🔥", false);
+      if (ball) {
+        // Check ball exists
+        ball.vx *= 1.3;
+        ball.vy *= 1.1; // Add slight vertical boost too
+      }
     }
 
     // Update game state after hit
     state.bounces = 0;
-    state.lastPaddleHitSide = "player1";
+    state.lastPaddleHitSide = "player1"; // Player 1 just hit
     state.lastBounceSide = null;
     state.mustBounceBeforeHit = true;
     state.hasBouncedOnCurrentSide = false;
     state.shotPower = 0; // Reset player shot power
-    state.aiCanHit = true; // Allow AI to hit next
+    // --- Corrected state update ---
+    state.aiCanHit = true; // AI can hit next
     state.aiWillMissThisShot = undefined; // Reset AI miss chance
   }
   function updateAI(delta) {
     const p2 = player2;
+    if (!p2 || !ball) return; // Exit if paddle or ball don't exist yet
+
     const screenW = app.screen.width,
       screenH = app.screen.height;
     const courtY = screenH * COURT_Y_FACTOR;
@@ -611,21 +827,35 @@ window.addEventListener("load", async () => {
       !state.hasBouncedOnCurrentSide &&
       ballSide === "player2"; // True when player serves to AI
 
+    // Use C constants with fallbacks
+    const net_h = C.NET_HEIGHT || BASE_CONSTANTS.NET_HEIGHT;
+    const paddle_w = C.PADDLE_WIDTH || BASE_CONSTANTS.PADDLE_WIDTH;
+    const paddle_y_margin = C.PADDLE_Y_MARGIN || BASE_CONSTANTS.PADDLE_Y_MARGIN;
+    const ai_min_x_margin =
+      C.AI_PADDLE_MIN_X_MARGIN || BASE_CONSTANTS.AI_PADDLE_MIN_X_MARGIN;
+    const ai_center_margin =
+      C.AI_CENTER_MARGIN || BASE_CONSTANTS.AI_CENTER_MARGIN;
+    const ball_r = C.BALL_RADIUS || BASE_CONSTANTS.BALL_RADIUS;
+
     // --- Define Serve Position ---
-    const serveContactHeight = courtY - C.NET_HEIGHT * 1.3;
+    const serveContactHeight = courtY - net_h * 1.3;
     // *** Explicitly define the X position AI should be at during serve ***
-    const serveWaitX = screenW / 2 + C.PADDLE_WIDTH * 3.0; // Fixed X target for serve hit
+    const serveWaitX = screenW / 2 + paddle_w * 3.0; // Fixed X target for serve hit
 
     // --- AI Paddle Movement ---
     // --- Normal Movement Logic for Rally/Return ---
     let targetX_AI = screenW * 0.8; // Default X
-    let targetY_AI = courtY - C.NET_HEIGHT / 2; // Default Y
-    const minY_AI = C.PADDLE_HEIGHT / 2 + C.PADDLE_Y_MARGIN;
-    const maxY_AI = courtY - C.PADDLE_HEIGHT / 2 - C.PADDLE_Y_MARGIN;
+    let targetY_AI = courtY - net_h / 2; // Default Y
+    const minY_AI =
+      (C.PADDLE_HEIGHT || BASE_CONSTANTS.PADDLE_HEIGHT) / 2 + paddle_y_margin;
+    const maxY_AI =
+      courtY -
+      (C.PADDLE_HEIGHT || BASE_CONSTANTS.PADDLE_HEIGHT) / 2 -
+      paddle_y_margin;
     let current_ai_x_speed = AI_PADDLE_SPEED_X; // Default rally speed
 
     // --- CHANGE 1: Define a flat intercept height ---
-    const interceptY_AI = courtY - C.NET_HEIGHT * 1.1; // AI waits here, doesn't follow ball to floor
+    const interceptY_AI = courtY - net_h * 1.1; // AI waits here, doesn't follow ball to floor
 
     if (isAiReturningServe && state.aiTargetX !== null) {
       targetX_AI = state.aiTargetX;
@@ -633,8 +863,8 @@ window.addEventListener("load", async () => {
       current_ai_x_speed = AI_SERVE_PADDLE_SPEED_X;
     } else if (isAiTurn) {
       // Rally movement (and now, Serve movement)
-      const minX_AI = screenW / 2 + C.AI_PADDLE_MIN_X_MARGIN;
-      const maxX_AI = screenW - C.PADDLE_WIDTH * 2;
+      const minX_AI = screenW / 2 + ai_min_x_margin;
+      const maxX_AI = screenW - paddle_w * 2;
       targetX_AI = Math.max(minX_AI, Math.min(maxX_AI, ball.x));
 
       // --- CHANGE 1 (Continued): Use the intercept height ---
@@ -642,7 +872,7 @@ window.addEventListener("load", async () => {
         // Don't follow the ball lower than the intercept height
         targetY_AI = Math.min(ball.y, interceptY_AI);
       } else {
-        targetY_AI = courtY - C.NET_HEIGHT / 2; // Default
+        targetY_AI = courtY - net_h / 2; // Default
       }
       current_ai_x_speed = AI_PADDLE_SPEED_X;
     }
@@ -672,21 +902,24 @@ window.addEventListener("load", async () => {
     switch (AI_DIFFICULTY /* ... */) {
       case "beginner":
         missChance = 0.25;
-        baseShotSpeed = C.AI_BEGINNER_SHOT_SPEED;
+        baseShotSpeed =
+          C.AI_BEGINNER_SHOT_SPEED || BASE_CONSTANTS.AI_BEGINNER_SHOT_SPEED;
         velocityError = 0.3;
         targetAccuracy = 0.4;
         targetSpread = 0.2;
         break;
       case "medium":
         missChance = 0.1;
-        baseShotSpeed = C.AI_MEDIUM_SHOT_SPEED;
+        baseShotSpeed =
+          C.AI_MEDIUM_SHOT_SPEED || BASE_CONSTANTS.AI_MEDIUM_SHOT_SPEED;
         velocityError = 0.15;
         targetAccuracy = 0.6;
         targetSpread = 0.3;
         break;
       case "expert":
         missChance = 0.03;
-        baseShotSpeed = C.AI_EXPERT_SHOT_SPEED;
+        baseShotSpeed =
+          C.AI_EXPERT_SHOT_SPEED || BASE_CONSTANTS.AI_EXPERT_SHOT_SPEED;
         velocityError = 0.08;
         targetAccuracy = 0.85;
         targetSpread = 0.4;
@@ -704,8 +937,8 @@ window.addEventListener("load", async () => {
       state.mustBounceBeforeHit &&
       !state.hasBouncedOnCurrentSide
     ) {
-      /* ... */
-      const powerFactor = state.shotPower / C.MAX_SHOT_POWER;
+      const max_power = C.MAX_SHOT_POWER || BASE_CONSTANTS.MAX_SHOT_POWER;
+      const powerFactor = state.shotPower / max_power; // Assuming player's shot power affects AI miss
       const isPlayerPowerShot = powerFactor > 0.7;
       const effectiveMissChance = missChance * (isPlayerPowerShot ? 1.5 : 1.0);
       state.aiWillMissThisShot = Math.random() < effectiveMissChance;
@@ -713,8 +946,13 @@ window.addEventListener("load", async () => {
     if (state.aiWillMissThisShot === true) return;
 
     // Hit conditions
-    const hitboxWidth = C.PADDLE_WIDTH * 4; // *** WIDER hitbox for serve debugging ***
-    const hitboxHeight = C.PADDLE_HEIGHT * 1.8; // *** TALLER hitbox for serve debugging ***
+    const ai_paddle_w = C.PADDLE_WIDTH || BASE_CONSTANTS.PADDLE_WIDTH;
+    const ai_paddle_h = C.PADDLE_HEIGHT || BASE_CONSTANTS.PADDLE_HEIGHT;
+    const ai_net_clearance =
+      C.AI_NET_CLEARANCE_VY || BASE_CONSTANTS.AI_NET_CLEARANCE_VY;
+
+    const hitboxWidth = ai_paddle_w * 4; // *** WIDER hitbox for serve debugging ***
+    const hitboxHeight = ai_paddle_h * 1.8; // *** TALLER hitbox for serve debugging ***
     const canHit =
       state.aiCanHit &&
       (isAiExecutingServe ||
@@ -733,7 +971,7 @@ window.addEventListener("load", async () => {
     const isInHittingZone = circleRectCollision(
       ball.x,
       ball.y,
-      C.BALL_RADIUS,
+      ball_r,
       p2.x,
       p2.y,
       hitboxWidth,
@@ -743,7 +981,7 @@ window.addEventListener("load", async () => {
     const isPaddleInPositionForServeReturn =
       !isAiReturningServe ||
       state.aiTargetX === null ||
-      Math.abs(p2.x - state.aiTargetX) < C.PADDLE_WIDTH * 1.5;
+      Math.abs(p2.x - state.aiTargetX) < ai_paddle_w * 1.5;
 
     if (
       canHit &&
@@ -751,13 +989,14 @@ window.addEventListener("load", async () => {
       isPaddleInPositionForServeReturn && // Still relevant for returns
       (isInServeWindow || isInRallyWindow) // Check phase
     ) {
+      // console.log("AI hit triggered"); // DEBUG LOG
       let vx, vy, targetX;
 
       if (isAiExecutingServe) {
         // AI Serve Execution (same logic as before)
         state.ballSpin = -1;
         targetX = screenW * (0.2 + Math.random() * 0.1);
-        const targetY = courtY - C.BALL_RADIUS;
+        const targetY = courtY - ball_r;
         const serveSpeed =
           baseShotSpeed * 0.95 * (1 + (Math.random() - 0.5) * velocityError);
         const { calcVx, calcVy } = calculateShotVelocity(
@@ -767,15 +1006,15 @@ window.addEventListener("load", async () => {
           targetY,
           serveSpeed,
           SLICE_GRAVITY_MULT,
-          C.AI_NET_CLEARANCE_VY * 1.8,
+          ai_net_clearance * 1.8,
         );
         vx = calcVx;
         vy = calcVy;
       } else {
         // AI Rally Shot OR Serve Return
         const playerCourtWidth = screenW / 2;
-        const targetableMinX = C.PADDLE_WIDTH * 4;
-        const targetableMaxX = playerCourtWidth - C.AI_CENTER_MARGIN;
+        const targetableMinX = paddle_w * 4;
+        const targetableMaxX = playerCourtWidth - ai_center_margin;
         const targetableWidth = targetableMaxX - targetableMinX;
         const randomTargetPoint =
           targetableMinX +
@@ -784,7 +1023,7 @@ window.addEventListener("load", async () => {
         targetX =
           randomTargetPoint +
           (Math.random() - 0.5) * targetableWidth * targetSpread;
-        const targetY = courtY - C.BALL_RADIUS * (1.7 + Math.random() * 0.6);
+        const targetY = courtY - ball_r * (1.7 + Math.random() * 0.6);
         if (isAiReturningServe) {
           state.ballSpin = -1;
         } else {
@@ -794,8 +1033,8 @@ window.addEventListener("load", async () => {
               : state.lastShotType === "slice"
                 ? -1
                 : 0;
-          const isHighBall = courtY - ball.y > C.NET_HEIGHT * 0.8;
-          const isMidHeightBall = courtY - ball.y > C.NET_HEIGHT * 0.3;
+          const isHighBall = courtY - ball.y > net_h * 0.8;
+          const isMidHeightBall = courtY - ball.y > net_h * 0.3;
 
           // --- CHANGE 2: Smartly counter topspin with a slice ---
           if (incomingSpin > 0 && Math.random() < 0.75) {
@@ -827,7 +1066,7 @@ window.addEventListener("load", async () => {
           (isAiReturningServe ? 0.9 : 1.05) *
           (1 + (Math.random() - 0.5) * velocityError);
         const netClearance =
-          C.AI_NET_CLEARANCE_VY * (isAiReturningServe ? 1.1 : 0.8);
+          ai_net_clearance * (isAiReturningServe ? 1.1 : 0.8);
         const { calcVx, calcVy } = calculateShotVelocity(
           ball.x,
           ball.y,
@@ -841,6 +1080,30 @@ window.addEventListener("load", async () => {
         vy = calcVy;
       }
 
+      // --- Add AI Paddle Hit Particles ---
+      const aiHitX = ball.x + Math.cos(p2.rotation) * ball_r;
+      const aiHitY = ball.y - Math.sin(p2.rotation) * ball_r;
+      const particle_vx =
+        C.PARTICLE_VX_RANGE || BASE_CONSTANTS.PARTICLE_VX_RANGE;
+      const particle_vy =
+        C.PARTICLE_VY_RANGE || BASE_CONSTANTS.PARTICLE_VY_RANGE;
+      const particle_life_min =
+        C.PARTICLE_LIFE_MIN || BASE_CONSTANTS.PARTICLE_LIFE_MIN;
+      const particle_life_max =
+        C.PARTICLE_LIFE_MAX || BASE_CONSTANTS.PARTICLE_LIFE_MAX;
+
+      createParticles(
+        aiHitX,
+        aiHitY,
+        PARTICLE_COUNT_HIT,
+        AI_COLOR_HEX,
+        particle_vx * 1.5,
+        particle_vy * 1.5,
+        particle_life_min,
+        particle_life_max,
+      );
+      if (motionBlurFilter) motionBlurFilter.blur = BLUR_STRENGTH_BASE * 1.5; // Add blur on AI hit too
+
       // Apply calculated velocity and update state (Common logic - same as before)
       ball.vx = vx;
       ball.vy = vy;
@@ -853,7 +1116,7 @@ window.addEventListener("load", async () => {
       state.lastBounceSide = null;
       state.mustBounceBeforeHit = true;
       state.hasBouncedOnCurrentSide = false;
-      state.aiCanHit = false;
+      state.aiCanHit = false; // AI just hit
       state.aiWillMissThisShot = undefined;
       if (isAiReturningServe) {
         state.aiTargetX = null;
@@ -877,7 +1140,11 @@ window.addEventListener("load", async () => {
   ) {
     const dx = targetX - startX;
     const dy = targetY - startY;
-    const effectiveGravity = C.GRAVITY * gravityMult;
+    const gravity = C.GRAVITY || BASE_CONSTANTS.GRAVITY;
+    const net_h = C.NET_HEIGHT || BASE_CONSTANTS.NET_HEIGHT;
+    const ball_r = C.BALL_RADIUS || BASE_CONSTANTS.BALL_RADIUS;
+
+    const effectiveGravity = gravity * gravityMult;
 
     // Estimate flight time based on horizontal distance and desired speed
     // This is an approximation as vertical motion affects total speed
@@ -893,9 +1160,9 @@ window.addEventListener("load", async () => {
     const midTime = flightTime / 2;
     const midY =
       startY + calcVy * midTime + 0.5 * effectiveGravity * midTime * midTime;
-    const netTopY = app.screen.height * COURT_Y_FACTOR - C.NET_HEIGHT;
+    const netTopY = app.screen.height * COURT_Y_FACTOR - net_h;
 
-    if (midY > netTopY - C.BALL_RADIUS) {
+    if (midY > netTopY - ball_r) {
       // Likely to hit net or be very close
       calcVy -= netClearanceVY; // Add upward velocity adjustment
       // Recalculate flight time and vx based on new vy (optional, can be complex)
@@ -915,7 +1182,19 @@ window.addEventListener("load", async () => {
   }
 
   function updateBall(delta) {
-    if (!state.ballInPlay) return;
+    if (!state.ballInPlay || !ball) return; // Check ball exists
+
+    const gravity = C.GRAVITY || BASE_CONSTANTS.GRAVITY;
+    const ball_r = C.BALL_RADIUS || BASE_CONSTANTS.BALL_RADIUS;
+    const particle_vx = C.PARTICLE_VX_RANGE || BASE_CONSTANTS.PARTICLE_VX_RANGE;
+    const particle_vy = C.PARTICLE_VY_RANGE || BASE_CONSTANTS.PARTICLE_VY_RANGE;
+    const particle_life_min =
+      C.PARTICLE_LIFE_MIN || BASE_CONSTANTS.PARTICLE_LIFE_MIN;
+    const particle_life_max =
+      C.PARTICLE_LIFE_MAX || BASE_CONSTANTS.PARTICLE_LIFE_MAX;
+    const net_bounce_y = C.NET_BOUNCE_Y_ADD || BASE_CONSTANTS.NET_BOUNCE_Y_ADD;
+    const net_bounce_vy =
+      C.NET_BOUNCE_VY_ADD || BASE_CONSTANTS.NET_BOUNCE_VY_ADD;
 
     const gravityMult =
       state.ballSpin > 0
@@ -923,7 +1202,7 @@ window.addEventListener("load", async () => {
         : state.ballSpin < 0
           ? SLICE_GRAVITY_MULT
           : 1;
-    ball.vy += C.GRAVITY * gravityMult * delta;
+    ball.vy += gravity * gravityMult * delta;
 
     ball.prevX = ball.x;
     ball.prevY = ball.y;
@@ -935,9 +1214,23 @@ window.addEventListener("load", async () => {
     const courtY = screenH * COURT_Y_FACTOR;
 
     // Floor collision
-    if (ball.y + C.BALL_RADIUS >= courtY) {
-      ball.y = courtY - C.BALL_RADIUS;
+    if (ball.y + ball_r >= courtY) {
+      ball.y = courtY - ball_r;
       const bounceSide = getBallSide();
+
+      // --- Add Ground Bounce Particles ---
+      // console.log("Ground bounce triggered"); // DEBUG LOG
+      createParticles(
+        ball.x, // Bounce X
+        courtY - ball_r, // Bounce Y (on the ground)
+        PARTICLE_COUNT_BOUNCE,
+        GROUND_COLOR_HEX,
+        particle_vx * 0.8, // Less horizontal spread for bounce
+        particle_vy * 1.2, // More vertical spread for bounce
+        particle_life_min * 0.8, // Shorter life for bounce
+        particle_life_max * 0.8,
+      );
+      if (motionBlurFilter) motionBlurFilter.blur = BLUR_STRENGTH_BASE * 0.5; // Small blur spike on bounce
 
       // Spin-dependent bounce physics
       if (state.ballSpin < 0) {
@@ -974,13 +1267,13 @@ window.addEventListener("load", async () => {
     }
 
     // Ceiling collision
-    if (ball.y - C.BALL_RADIUS <= 0) {
-      ball.y = C.BALL_RADIUS;
+    if (ball.y - ball_r <= 0) {
+      ball.y = ball_r;
       ball.vy *= -0.8;
     }
 
     // Out of bounds (sides)
-    if (ball.x + C.BALL_RADIUS < 0 || ball.x - C.BALL_RADIUS > screenW) {
+    if (ball.x + ball_r < 0 || ball.x - ball_r > screenW) {
       const pointWinner = determineOutOfBoundsWinner();
       if (pointWinner) pointOver(pointWinner);
       return;
@@ -1003,32 +1296,37 @@ window.addEventListener("load", async () => {
   }
 
   function handleNetCollision() {
+    if (!ball) return; // Check ball exists
     const screenW = app.screen.width,
       screenH = app.screen.height;
     const courtY = screenH * COURT_Y_FACTOR;
     const netX = screenW / 2;
-    const netTopY = courtY - C.NET_HEIGHT;
+    const net_h = C.NET_HEIGHT || BASE_CONSTANTS.NET_HEIGHT;
+    const ball_r = C.BALL_RADIUS || BASE_CONSTANTS.BALL_RADIUS;
+    const net_bounce_y = C.NET_BOUNCE_Y_ADD || BASE_CONSTANTS.NET_BOUNCE_Y_ADD;
+    const net_bounce_vy =
+      C.NET_BOUNCE_VY_ADD || BASE_CONSTANTS.NET_BOUNCE_VY_ADD;
+
+    const netTopY = courtY - net_h;
 
     const crossedNet =
       (ball.prevX < netX && ball.x >= netX) ||
       (ball.prevX > netX && ball.x <= netX);
 
     if (crossedNet) {
-      const t = (netX - ball.prevX) / (ball.x - ball.prevX); // Interpolation factor
+      const t = (netX - ball.prevX) / (ball.x - ball.prevX || 1); // Avoid div by zero
       const crossY = ball.prevY + t * (ball.y - ball.prevY); // Y position at net crossing
 
-      if (crossY > netTopY - C.BALL_RADIUS) {
+      if (crossY > netTopY - ball_r) {
         // Hit the net
-        ball.x =
-          ball.prevX < netX ? netX - C.BALL_RADIUS : netX + C.BALL_RADIUS; // Place ball just before/after net
+        ball.x = ball.prevX < netX ? netX - ball_r : netX + ball_r; // Place ball just before/after net
         ball.y = crossY;
         ball.vx *= -0.5; // Reverse horizontal direction slightly
         ball.vy *= 0.6; // Reduce vertical speed
 
         // Add upward pop if hit near the top
-        if (crossY < netTopY + C.NET_BOUNCE_Y_ADD) {
-          ball.vy =
-            -Math.abs(ball.vy) * 0.4 - Math.random() * C.NET_BOUNCE_VY_ADD;
+        if (crossY < netTopY + net_bounce_y) {
+          ball.vy = -Math.abs(ball.vy) * 0.4 - Math.random() * net_bounce_vy;
         }
         state.ballSpin = 0; // Net removes spin
       }
@@ -1036,7 +1334,8 @@ window.addEventListener("load", async () => {
   }
 
   function updateTrail() {
-    if (!state.ballInPlay) return;
+    if (!state.ballInPlay || !ball || !trail) return; // Check exists
+    const ball_r = C.BALL_RADIUS || BASE_CONSTANTS.BALL_RADIUS;
     trailPoints.push({ x: ball.x, y: ball.y, alpha: 1 });
     if (trailPoints.length > 15) trailPoints.shift();
 
@@ -1044,46 +1343,21 @@ window.addEventListener("load", async () => {
     for (let i = 0; i < trailPoints.length; i++) {
       const point = trailPoints[i];
       const alpha = (i / trailPoints.length) * 0.6;
-      const size = (i / trailPoints.length) * C.BALL_RADIUS;
-      trail.circle(point.x, point.y, size).fill({ color: 0xffff00, alpha });
-    }
-  }
-
-  function updateParticles(delta) {
-    for (let i = particles.length - 1; i >= 0; i--) {
-      const p = particles[i];
-      p.x += p.vx * delta;
-      p.y += p.vy * delta;
-      p.life--;
-      p.alpha = Math.max(0, p.life / p.initialLife);
-      if (p.life <= 0) {
-        app.stage.removeChild(p);
-        particles.splice(i, 1);
-      }
-    }
-  }
-
-  function createFireEffect(x, y) {
-    for (let i = 0; i < 8; i++) {
-      const particle = new PIXI.Graphics();
-      particle
-        .circle(0, 0, Math.random() * C.PARTICLE_SIZE_MAX + C.PARTICLE_SIZE_MIN)
-        .fill(Math.random() > 0.5 ? 0xff6600 : 0xff0000);
-      particle.x = x;
-      particle.y = y;
-      particle.alpha = 1;
-      particle.vx = (Math.random() - 0.5) * C.PARTICLE_VX;
-      particle.vy = (Math.random() - 0.5) * C.PARTICLE_VY;
-      particle.initialLife = C.PARTICLE_LIFE;
-      particle.life = C.PARTICLE_LIFE;
-      app.stage.addChild(particle);
-      particles.push(particle);
+      const size = (i / trailPoints.length) * ball_r;
+      trail
+        .circle(point.x, point.y, size)
+        .fill({ color: BALL_COLOR_HEX, alpha });
     }
   }
 
   // --- Game State Management ---
 
   function startServe(toLeft) {
+    if (!ball) return; // Check ball exists
+    const serve_vx = C.SERVE_VX || BASE_CONSTANTS.SERVE_VX;
+    const serve_vy = C.SERVE_VY || BASE_CONSTANTS.SERVE_VY;
+    const net_h = C.NET_HEIGHT || BASE_CONSTANTS.NET_HEIGHT;
+
     serveTrajectoryLine.clear();
     hideMessage();
     state.bounces = 0;
@@ -1096,39 +1370,45 @@ window.addEventListener("load", async () => {
     state.aiWillMissThisShot = undefined;
     state.aiCanHit = true;
     trailPoints = [];
-    trail.clear();
+    if (trail) trail.clear(); // Check trail exists
 
     const screenW = app.screen.width,
       screenH = app.screen.height;
     const courtY = screenH * COURT_Y_FACTOR;
 
     ball.x = screenW / 2;
-    ball.y = courtY - C.NET_HEIGHT * 3.6; // Position ball for serve
-    ball.vx = toLeft ? -C.SERVE_VX : C.SERVE_VX;
-    ball.vy = C.SERVE_VY;
+    ball.y = courtY - net_h * 3.6; // Position ball for serve
+    ball.vx = toLeft ? -serve_vx : serve_vx;
+    ball.vy = serve_vy;
 
     state.ballInPlay = true;
   }
 
   function calculateServeIntercept() {
+    // Use C constants with fallbacks
+    const net_h = C.NET_HEIGHT || BASE_CONSTANTS.NET_HEIGHT;
+    const serve_vx = C.SERVE_VX || BASE_CONSTANTS.SERVE_VX;
+    const serve_vy = C.SERVE_VY || BASE_CONSTANTS.SERVE_VY;
+    const gravity = C.GRAVITY || BASE_CONSTANTS.GRAVITY;
+
     // Predict where AI needs to be for the serve
     const screenW = app.screen.width;
     const screenH = app.screen.height;
     const courtY = screenH * COURT_Y_FACTOR;
-    const serveContactHeight = courtY - C.NET_HEIGHT * 1.3; // AI hit height
+    const serveContactHeight = courtY - net_h * 1.3; // AI hit height
 
     // Simulate ball path (only need to do this for AI receiving serve)
     let simX = screenW / 2;
-    let simY = courtY - C.NET_HEIGHT * 3.6; // Serve start Y
-    let simVY = C.SERVE_VY;
-    const simVX = C.SERVE_VX; // Serve always goes right towards AI
+    let simY = courtY - net_h * 3.6; // Serve start Y
+    let simVY = serve_vy;
+    const simVX = serve_vx; // Serve always goes right towards AI
     const dt = 0.1; // Small time step for accuracy
     let safetyCounter = 0;
     let hasReachedApex = false;
     let predictedX = null;
 
     while (simY < courtY && safetyCounter < 5000) {
-      simVY += C.GRAVITY * dt; // Basic gravity, spin isn't applied yet
+      simVY += gravity * dt; // Basic gravity, spin isn't applied yet
       simX += simVX * dt;
       simY += simVY * dt;
       safetyCounter++;
@@ -1149,10 +1429,13 @@ window.addEventListener("load", async () => {
     const loser = winner === "player1" ? "player2" : "player1";
     state.scores[winner].points++;
     state.ballInPlay = false; // Stop ball updates immediately
-    ball.vx = 0;
-    ball.vy = 0; // Stop ball movement visually
+    if (ball) {
+      // Check ball exists
+      ball.vx = 0;
+      ball.vy = 0; // Stop ball movement visually
+    }
     trailPoints = [];
-    trail.clear(); // Clear trail
+    if (trail) trail.clear(); // Clear trail
     state.aiTargetX = null; // Clear AI target
 
     updateScore(winner, loser); // Check for game over
@@ -1163,19 +1446,28 @@ window.addEventListener("load", async () => {
 
   function resetRound() {
     state.ballInPlay = false;
-    ball.x = -2000;
-    ball.y = -2000;
-    ball.vx = 0;
-    ball.vy = 0; // Hide ball
+    if (ball) {
+      // Check ball exists
+      ball.x = -2000;
+      ball.y = -2000;
+      ball.vx = 0;
+      ball.vy = 0; // Hide ball
+    }
     trailPoints = [];
-    trail.clear();
-    contactLine.clear();
-    player1.swing.active = false;
-    player1.x = player1.baseX;
-    player1.scale.set(1, 1);
-    redrawPaddle(player1);
-    player2.swing.active = false;
-    player2.x = player2.baseX; // Reset AI paddle too
+    if (trail) trail.clear();
+    if (contactLine) contactLine.clear();
+    if (player1) {
+      // Check player1 exists
+      player1.swing.active = false;
+      player1.x = player1.baseX;
+      player1.scale.set(1, 1);
+      redrawPaddle(player1);
+    }
+    if (player2) {
+      // Check player2 exists
+      player2.swing.active = false;
+      player2.x = player2.baseX;
+    }
     state.shotCharging = false;
     state.shotPower = 0;
     state.aiTargetX = null; // Clear previous target
@@ -1223,6 +1515,7 @@ window.addEventListener("load", async () => {
   }
 
   function getBallSide() {
+    if (!ball) return null; // Check ball exists
     return ball.x < app.screen.width / 2 ? "player1" : "player2";
   }
 
@@ -1312,7 +1605,7 @@ window.addEventListener("load", async () => {
     });
     gameOverScreen.style.display = "none";
     initializeGameState();
-    gameStarted = true; // <-- ADD THIS LINE
+    gameStarted = true; // Make sure game restarts
     updateScoreUI();
     resetRound(); // Start the first serve
   }
@@ -1341,19 +1634,25 @@ window.addEventListener("load", async () => {
   }
 
   function drawServeTrajectory(toLeft) {
+    if (!serveTrajectoryLine) return; // Check exists
+    const net_h = C.NET_HEIGHT || BASE_CONSTANTS.NET_HEIGHT;
+    const serve_vx = C.SERVE_VX || BASE_CONSTANTS.SERVE_VX;
+    const serve_vy = C.SERVE_VY || BASE_CONSTANTS.SERVE_VY;
+    const gravity = C.GRAVITY || BASE_CONSTANTS.GRAVITY;
+
     serveTrajectoryLine.clear();
     const screenW = app.screen.width,
       screenH = app.screen.height;
     const courtY = screenH * COURT_Y_FACTOR;
     let simX = screenW / 2,
-      simY = courtY - C.NET_HEIGHT * 3.6;
-    let simVY = C.SERVE_VY;
-    const simVX = toLeft ? -C.SERVE_VX : C.SERVE_VX;
+      simY = courtY - net_h * 3.6;
+    let simVY = serve_vy;
+    const simVX = toLeft ? -serve_vx : serve_vx;
     const pathPoints = [];
 
     while (simY < courtY) {
       // Simulate until floor hit
-      simVY += C.GRAVITY;
+      simVY += gravity; // Simple step simulation
       simX += simVX;
       simY += simVY;
       pathPoints.push({ x: simX, y: simY });
@@ -1370,13 +1669,18 @@ window.addEventListener("load", async () => {
   }
 
   // --- Main Execution ---
-  await initializePixiApp();
-  initializeGameState();
-  setupScene();
-  setupUIListeners(); // Setup intro/game over screen listeners
-  addControls(); // Add interactive game controls
-  app.renderer.on("resize", resizeAndPosition);
-  resizeAndPosition(); // Initial positioning and constant scaling
-  updateScoreUI(); // Initial score display
-  app.ticker.add(gameLoop); // Start the game loop
+  try {
+    // Add try...catch for better debugging
+    await initializePixiApp();
+    initializeGameState();
+    setupScene();
+    setupUIListeners(); // Setup intro/game over screen listeners
+    addControls(); // Add interactive game controls
+    app.renderer.on("resize", resizeAndPosition);
+    resizeAndPosition(); // Initial positioning and constant scaling
+    updateScoreUI(); // Initial score display
+    app.ticker.add(gameLoop); // Start the game loop
+  } catch (error) {
+    console.error("Error during initialization or game loop:", error);
+  }
 }); // End window load listener
