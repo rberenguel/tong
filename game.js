@@ -750,9 +750,9 @@ window.addEventListener("load", async () => {
       // Check ball exists
       ball.vx = Math.cos(player1.rotation) * power * GAME_SPEED_MODIFIER;
       if (shotType === "slice") {
-        ball.vy = -Math.sin(Math.abs(player1.rotation)) * power * 0.3; // Lower angle for slice
+        ball.vy = -Math.sin(Math.abs(player1.rotation)) * power * 0.35; // Lower angle for slice
       } else {
-        ball.vy = -Math.sin(player1.rotation) * power * 0.55; // Normal/topspin angle
+        ball.vy = -Math.sin(player1.rotation) * power * 0.65; // Normal/topspin angle
       }
     }
 
